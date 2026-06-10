@@ -1,0 +1,10 @@
+DROP TABLE dead_letters;
+DROP TABLE delivery_attempts;
+DROP TABLE idempotency_keys;
+DROP TABLE deliveries;
+DROP TABLE events;
+DROP TABLE subscriptions;
+DROP TABLE endpoints;
+DROP TABLE producer_keys;
+DROP TYPE attempt_status;
+DROP TYPE delivery_state;
