@@ -2,3 +2,7 @@
 *.test
 coverage.out
 .env
+.agent/
+reasonix.toml
+.reasonix-runs/
+.DS_Store
