@@ -1,0 +1,83 @@
+openapi: 3.0.3
+info:
+  title: Hookrail API
+  version: 0.1.0
+  description: Ingress surface (P0). Admin CRUD lands in P1. Errors are RFC 7807 problem+json.
+servers:
+  - url: http://localhost:8080
+security:
+  - producerKey: []
+paths:
+  /v1/events:
+    post:
+      summary: Ingest an event (at-least-once fan-out to matching subscriptions)
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+          required: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, payload]
+              properties:
+                topic: { type: string, example: orders.created }
+                payload: { type: object, description: "max 256KB" }
+      responses:
+        "202":
+          description: Durably recorded (PG commit). Delivery is asynchronous.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_id: { type: string }
+                  delivery_ids: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /v1/events/{id}:
+    get:
+      summary: Event status with per-delivery attempt timeline
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_id: { type: string }
+                  topic: { type: string }
+                  deliveries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        delivery_id: { type: string }
+                        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered] }
+                        attempts: { type: array, items: { type: object } }
+        "404": { $ref: "#/components/responses/Problem" }
+components:
+  securitySchemes:
+    producerKey: { type: http, scheme: bearer }
+  responses:
+    Problem:
+      description: RFC 7807 problem
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            properties:
+              type: { type: string }
+              title: { type: string }
+              status: { type: integer }
+              detail: { type: string }
