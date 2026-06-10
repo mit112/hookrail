@@ -9,7 +9,6 @@ linters:
     - ineffassign
     - misspell
     - gosec
-linters-settings: {}
 run:
   build-tags:
     - integration
