@@ -11,7 +11,7 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: "1.24" }
       - uses: golangci/golangci-lint-action@v6
-        with: { version: "v2" }
+        with: { version: "v2.12.2" }
   test:
     runs-on: ubuntu-latest
     steps:
