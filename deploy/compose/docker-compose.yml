@@ -1,0 +1,103 @@
+name: hookrail
+# Fixed subnet so HOOKRAIL_ALLOW_CIDRS can name it precisely: in-network
+# delivery (test-receiver) resolves to this range, which the default SSRF
+# policy would correctly block as private — §8 allowlist mode covers it.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hookrail
+      POSTGRES_USER: hookrail
+      POSTGRES_PASSWORD: hookrail
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hookrail"]
+      interval: 2s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]  # AOF reduces the loss gap (§10)
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 20
+
+  migrate: # one-shot migration job: every service waits for it, none race it
+    build: ../..
+    command: ["hookrail-ctl", "migrate"]
+    restart: "no"
+    environment: &hookrail-env
+      DATABASE_URL: postgres://hookrail:hookrail@postgres:5432/hookrail?sslmode=disable
+      REDIS_ADDR: redis:6379
+      HOOKRAIL_MASTER_KEY: ${HOOKRAIL_MASTER_KEY}
+      HOOKRAIL_ALLOW_HTTP: "true"            # compose-only: receiver is plain http (§8 dev mode)
+      HOOKRAIL_ALLOW_CIDRS: "172.28.0.0/16"  # compose-only: in-network delivery (§8 allowlist mode)
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    build: ../..
+    command: ["hookrail-api"]
+    environment: *hookrail-env
+    ports: ["8080:8080"]
+    # NO redis dependency: the 202 durability path needs only PG (§3.1);
+    # the sweeper repairs dispatch when Redis shows up late
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    build: ../..
+    command: ["hookrail-worker"]
+    environment: *hookrail-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  scheduler:
+    build: ../..
+    command: ["hookrail-scheduler"]
+    environment: *hookrail-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  test-receiver:
+    build: ../..
+    command: ["test-receiver"]
+    ports: ["9090:9090"]
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9091:9090"]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/ds.yaml:ro
+    ports: ["3000:3000"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.58
+    ports: ["16686:16686"]
