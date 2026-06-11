@@ -11,6 +11,7 @@ import (
 
 	"github.com/mit112/hookrail/internal/api"
 	"github.com/mit112/hookrail/internal/config"
+	"github.com/mit112/hookrail/internal/obs"
 	"github.com/mit112/hookrail/internal/queue"
 	"github.com/mit112/hookrail/internal/ratelimit"
 	"github.com/mit112/hookrail/internal/store"
@@ -25,6 +26,12 @@ func main() {
 		slog.Error("config", "err", err)
 		os.Exit(1)
 	}
+	shutdown, err := obs.InitTracing(ctx, "hookrail-api")
+	if err != nil {
+		slog.Error("tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdown(context.Background()) }()
 	s, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("store", "err", err)

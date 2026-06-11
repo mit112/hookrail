@@ -12,9 +12,14 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/mit112/hookrail/internal/backoff"
 	"github.com/mit112/hookrail/internal/crypto"
 	"github.com/mit112/hookrail/internal/domain"
+	"github.com/mit112/hookrail/internal/obs"
 	"github.com/mit112/hookrail/internal/queue"
 	"github.com/mit112/hookrail/internal/ratelimit"
 	"github.com/mit112/hookrail/internal/signing"
@@ -101,6 +106,11 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 func (w *Worker) attempt(ctx context.Context, d store.ClaimedDelivery) (res store.AttemptResult) {
 	started := time.Now()
 	res = store.AttemptResult{DeliveryID: d.ID, AttemptNo: d.AttemptCount, ClaimVersion: d.ClaimVersion, RequestedAt: started}
+	ctx, span := otel.Tracer("hookrail-worker").Start(ctx, "delivery_attempt",
+		trace.WithAttributes(
+			attribute.String("hookrail.delivery_id", d.ID),
+			attribute.Int("hookrail.attempt_no", d.AttemptCount)))
+	defer span.End()
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("panic during delivery", "delivery_id", d.ID, "panic", r)
@@ -110,6 +120,8 @@ func (w *Worker) attempt(ctx context.Context, d store.ClaimedDelivery) (res stor
 	}()
 	finish := func() {
 		res.CompletedAt = time.Now()
+		obs.AttemptDuration.Observe(res.CompletedAt.Sub(started).Seconds())
+		obs.DeliveriesTotal.WithLabelValues(string(res.Outcome), orDash(res.ErrorClass)).Inc()
 		res.LatencyMS = int(res.CompletedAt.Sub(started).Milliseconds())
 	}
 
@@ -175,3 +187,5 @@ func (w *Worker) record(ctx context.Context, d store.ClaimedDelivery, res store.
 			"delivery_id", d.ID, "err", err)
 	}
 }
+
+func orDash(s string) string { if s == "" { return "-" }; return s }

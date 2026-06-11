@@ -6,6 +6,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/mit112/hookrail/internal/obs"
 )
 
 type Source interface {
@@ -44,6 +46,7 @@ func (sw *Sweeper) RunOnce(ctx context.Context) (int, error) {
 				slog.Warn("sweeper publish failed", "delivery_id", id, "err", err)
 				continue
 			}
+			obs.SweeperRepublished.Inc()
 			total++
 		}
 		cursor = ids[len(ids)-1]

@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/mit112/hookrail/internal/obs"
 	"github.com/mit112/hookrail/internal/ratelimit"
 	"github.com/mit112/hookrail/internal/store"
 )
@@ -54,6 +57,9 @@ type postEventReq struct {
 
 func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 	keyID := r.Context().Value(producerKeyCtx).(string)
+	ctx, span := otel.Tracer("hookrail-api").Start(r.Context(), "ingest_event")
+	defer span.End()
+	r = r.WithContext(ctx)
 	if !s.limits.Allow(keyID, time.Now()) {
 		problem(w, http.StatusTooManyRequests, "rate limited", "per-key ingest rate exceeded")
 		return
@@ -89,15 +95,18 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, store.ErrIdempotencyConflict):
+		obs.IngestEventsTotal.WithLabelValues("conflict").Inc()
 		problem(w, http.StatusConflict, "idempotency conflict", "Idempotency-Key was reused with a different body")
 		return
 	case err != nil:
 		// §10: PG down → 503, no silent accept. The 202 promise requires the commit.
 		slog.Error("ingest failed", "err", err)
+		obs.IngestEventsTotal.WithLabelValues("rejected").Inc()
 		problem(w, http.StatusServiceUnavailable, "ingest unavailable", "could not durably record the event")
 		return
 	}
 
+	obs.IngestEventsTotal.WithLabelValues(map[bool]string{true: "replayed", false: "accepted"}[res.Replayed]).Inc()
 	if !res.Replayed {
 		// Best-effort XADD after commit (§3.1): failure only delays delivery
 		// until the next sweep; it never loses it.

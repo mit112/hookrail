@@ -4,3 +4,6 @@ scrape_configs:
   - job_name: hookrail-api
     static_configs:
       - targets: ["api:8080"]
+  - job_name: hookrail-worker
+    static_configs:
+      - targets: ["worker:8081"]
