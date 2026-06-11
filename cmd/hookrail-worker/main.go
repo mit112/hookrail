@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -63,7 +64,9 @@ func main() {
 	pol := ssrf.Policy{AllowHTTP: cfg.AllowHTTP, AllowCIDRs: prefixes}
 
 	host, _ := os.Hostname()
-	limits := ratelimit.NewRegistry(50, 100) // per-endpoint default; per-sub rps is P1 wiring
+	// Per-endpoint default; per-sub rps is P1 wiring. Default must clear the
+	// §11 baseline profiles (fan-out 3 at 200 ev/s = 200 rps/endpoint + retries).
+	limits := ratelimit.NewRegistry(envFloat("HOOKRAIL_DEFAULT_RPS", 1000), envFloat("HOOKRAIL_DEFAULT_BURST", 2000))
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.Handler())
@@ -88,4 +91,14 @@ func main() {
 
 func hostConsumer(host string, i int) string {
 	return fmt.Sprintf("%s-%c", host, 'a'+i)
+}
+
+func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return f
+		}
+		slog.Warn("invalid value, using default", "env", key, "value", v, "default", def)
+	}
+	return def
 }
