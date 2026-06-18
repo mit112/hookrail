@@ -92,9 +92,11 @@ func (s *Store) CompleteAttempt(ctx context.Context, r AttemptResult, pol backof
 		// upsert: a replayed delivery that dead-letters AGAIN must show the
 		// new error and timestamp, and shed its replayed_at marker
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO dead_letters (delivery_id, final_error) VALUES ($1, $2)
+			`INSERT INTO dead_letters (delivery_id, final_error, endpoint_id)
+			 SELECT $1, $2, endpoint_id FROM deliveries WHERE id = $1
 			 ON CONFLICT (delivery_id) DO UPDATE
-			   SET final_error = EXCLUDED.final_error, dead_at = now(), replayed_at = NULL`,
+			   SET final_error = EXCLUDED.final_error, dead_at = now(), replayed_at = NULL,
+			       endpoint_id = EXCLUDED.endpoint_id`,
 			r.DeliveryID, r.ErrorClass); err != nil {
 			return err
 		}
@@ -125,9 +127,11 @@ func (s *Store) DeadLetterExhausted(ctx context.Context, id string, claimVersion
 		return ErrStaleClaim
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO dead_letters (delivery_id, final_error) VALUES ($1, 'attempts_exhausted')
+		`INSERT INTO dead_letters (delivery_id, final_error, endpoint_id)
+		 SELECT $1, 'attempts_exhausted', endpoint_id FROM deliveries WHERE id = $1
 		 ON CONFLICT (delivery_id) DO UPDATE
-		   SET final_error = EXCLUDED.final_error, dead_at = now(), replayed_at = NULL`, id); err != nil {
+		   SET final_error = EXCLUDED.final_error, dead_at = now(), replayed_at = NULL,
+		       endpoint_id = EXCLUDED.endpoint_id`, id); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
