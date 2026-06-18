@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -86,4 +87,128 @@ func (s *Store) SoftDeleteEndpoint(ctx context.Context, id string) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// ── Subscription types & store methods ──────────────────────────────────────
+
+type SubInput struct {
+	TopicPattern  string
+	EndpointID    string
+	MaxAttempts   int
+	RateLimitRPS  *float64
+	BackoffPolicy []byte // raw JSONB or nil
+}
+
+type SubscriptionRow struct {
+	ID            string          `json:"id"`
+	TopicPattern  string          `json:"topic_pattern"`
+	EndpointID    string          `json:"endpoint_id"`
+	MaxAttempts   int             `json:"max_attempts"`
+	RateLimitRPS  *float64        `json:"rate_limit_rps,omitempty"`
+	BackoffPolicy json.RawMessage `json:"backoff_policy,omitempty"`
+	Active        bool            `json:"active"`
+	DeletedAt     *time.Time      `json:"deleted_at,omitempty"`
+}
+
+// CreateSubscriptionFull inserts a subscription against a LIVE endpoint only.
+// A deleted/absent endpoint yields ErrConflict (handler → 409). CHECK
+// constraints reject bad max_attempts/rate (handler maps the PG error → 422).
+func (s *Store) CreateSubscriptionFull(ctx context.Context, p SubInput) (string, error) {
+	id := NewID()
+	ct, err := s.Pool.Exec(ctx,
+		`INSERT INTO subscriptions (id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy)
+		 SELECT $1, $2, $3, $4, $5, $6
+		 WHERE EXISTS (SELECT 1 FROM endpoints WHERE id=$3 AND deleted_at IS NULL)`,
+		id, p.TopicPattern, p.EndpointID, p.MaxAttempts, p.RateLimitRPS, nullJSON(p.BackoffPolicy))
+	if err != nil {
+		return "", err
+	}
+	if ct.RowsAffected() == 0 {
+		return "", ErrConflict
+	}
+	return id, nil
+}
+
+func (s *Store) GetSubscription(ctx context.Context, id string, includeDeleted bool) (SubscriptionRow, error) {
+	q := `SELECT id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy, active, deleted_at
+	      FROM subscriptions WHERE id=$1`
+	if !includeDeleted {
+		q += ` AND deleted_at IS NULL`
+	}
+	var r SubscriptionRow
+	err := s.Pool.QueryRow(ctx, q, id).Scan(&r.ID, &r.TopicPattern, &r.EndpointID, &r.MaxAttempts,
+		&r.RateLimitRPS, &r.BackoffPolicy, &r.Active, &r.DeletedAt)
+	return r, err
+}
+
+func (s *Store) ListSubscriptions(ctx context.Context, endpointID, afterID string, limit int) ([]SubscriptionRow, error) {
+	args := []any{afterID, limit}
+	q := `SELECT id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy, active, deleted_at
+	      FROM subscriptions WHERE ($1 = '' OR id < $1) AND deleted_at IS NULL`
+	if endpointID != "" {
+		q += ` AND endpoint_id = $3`
+		args = append(args, endpointID)
+	}
+	q += ` ORDER BY id DESC LIMIT $2`
+	rows, err := s.Pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SubscriptionRow
+	for rows.Next() {
+		var r SubscriptionRow
+		if err := rows.Scan(&r.ID, &r.TopicPattern, &r.EndpointID, &r.MaxAttempts,
+			&r.RateLimitRPS, &r.BackoffPolicy, &r.Active, &r.DeletedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UpdateSubscription applies partial updates. A soft-deleted subscription is
+// immutable (F3): 0 rows affected → ErrNotFound, which the handler maps to 409
+// when the row exists-but-deleted, else 404.
+func (s *Store) UpdateSubscription(ctx context.Context, id string, active *bool, maxAttempts *int, rps *float64, backoff []byte, setBackoff bool) error {
+	ct, err := s.Pool.Exec(ctx,
+		`UPDATE subscriptions SET
+		   active = COALESCE($2, active),
+		   max_attempts = COALESCE($3, max_attempts),
+		   rate_limit_rps = CASE WHEN $4 THEN $5 ELSE rate_limit_rps END,
+		   backoff_policy = CASE WHEN $6 THEN $7 ELSE backoff_policy END
+		 WHERE id=$1 AND deleted_at IS NULL`,
+		id, active, maxAttempts, rps != nil, rps, setBackoff, nullJSON(backoff))
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SoftDeleteSubscription(ctx context.Context, id string) error {
+	ct, err := s.Pool.Exec(ctx, `UPDATE subscriptions SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SubscriptionExists checks if a subscription with the given id exists (including soft-deleted).
+func (s *Store) SubscriptionExists(ctx context.Context, id string) (bool, error) {
+	var ok bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM subscriptions WHERE id=$1)`, id).Scan(&ok)
+	return ok, err
+}
+
+func nullJSON(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
 }

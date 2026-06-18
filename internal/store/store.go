@@ -44,6 +44,9 @@ func (s *Store) Close() { s.Pool.Close() }
 // ErrNotFound: admin lookups/updates that match no live row (handler → 404).
 var ErrNotFound = errors.New("store: not found")
 
+// ErrConflict: state conflict (handler → 409).
+var ErrConflict = errors.New("store: conflicting state")
+
 func pgxTxRW() pgx.TxOptions { return pgx.TxOptions{} }
 
 // Migrate applies all embedded migrations (golang-migrate, §5).
