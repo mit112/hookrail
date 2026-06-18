@@ -12,9 +12,10 @@ type AttemptView struct {
 }
 
 type DeliveryView struct {
-	DeliveryID string        `json:"delivery_id"`
-	State      string        `json:"state"`
-	Attempts   []AttemptView `json:"attempts"`
+	DeliveryID        string        `json:"delivery_id"`
+	State             string        `json:"state"`
+	AttemptsTruncated bool          `json:"attempts_truncated"`
+	Attempts          []AttemptView `json:"attempts"`
 }
 
 type EventStatus struct {
@@ -31,14 +32,14 @@ func (s *Store) GetEventStatus(ctx context.Context, eventID string) (EventStatus
 		return st, err
 	}
 	rows, err := s.Pool.Query(ctx,
-		`SELECT id, state::text FROM deliveries WHERE event_id = $1 ORDER BY id`, eventID)
+		`SELECT id, state::text, (attempts_truncated_at IS NOT NULL) FROM deliveries WHERE event_id = $1 ORDER BY id`, eventID)
 	if err != nil {
 		return st, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var d DeliveryView
-		if err := rows.Scan(&d.DeliveryID, &d.State); err != nil {
+		if err := rows.Scan(&d.DeliveryID, &d.State, &d.AttemptsTruncated); err != nil {
 			return st, err
 		}
 		d.Attempts = []AttemptView{}

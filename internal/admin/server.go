@@ -69,10 +69,6 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func stub(w http.ResponseWriter) {
-	httpx.Problem(w, http.StatusNotImplemented, "not implemented", "filled in a later Slice A task")
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
