@@ -47,7 +47,29 @@ func (s *Server) listDLQ(w http.ResponseWriter, r *http.Request) {
 }
 
 // replayDLQ is a stub; replaced in Task 13.
-func (s *Server) replayDLQ(w http.ResponseWriter, r *http.Request) { stub(w) }
+func (s *Server) replayDLQ(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("delivery_id")
+	out, err := s.store.ReplayDeadLetter(r.Context(), id, s.replayAge)
+	if err != nil {
+		httpx.Problem(w, http.StatusServiceUnavailable, "replay failed", "query error")
+		return
+	}
+	switch out {
+	case store.ReplayOK:
+		// best-effort re-publish; sweeper repairs on failure (design §4.1 step 5)
+		if perr := s.queue.Publish(r.Context(), id); perr != nil {
+			// non-fatal: row is pending; the sweeper will pick it up
+			_ = perr
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"delivery_id": id, "state": "pending"})
+	case store.ReplayNotFound:
+		httpx.Problem(w, http.StatusNotFound, "not found", "no delivery with that id")
+	case store.ReplayGone:
+		httpx.Problem(w, http.StatusGone, "expired", "dead-letter is past the replay window")
+	default:
+		httpx.Problem(w, http.StatusConflict, "not replayable", "delivery is live, already replayed, or its target is deleted")
+	}
+}
 
 func parseTime(v string) (time.Time, bool) {
 	if v == "" {

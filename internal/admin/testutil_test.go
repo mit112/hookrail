@@ -116,7 +116,7 @@ func newServer(t *testing.T) (*admin.Server, *store.Store) {
 	t.Cleanup(s.Close)
 	// AllowHTTP so the test receiver URL passes SSRF (dev policy).
 	pol := ssrf.Policy{AllowHTTP: true}
-	srv := admin.New(s, &noQueue{}, [32]byte{}, pol, ratelimit.NewRegistry(500, 1000), testToken)
+	srv := admin.New(s, &noQueue{}, [32]byte{}, pol, ratelimit.NewRegistry(500, 1000), testToken, time.Hour)
 	return srv, s
 }
 

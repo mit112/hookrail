@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -28,10 +29,11 @@ type Server struct {
 	policy      ssrf.Policy
 	limits      *ratelimit.Registry
 	tokenDigest [32]byte
+	replayAge   time.Duration
 }
 
-func New(s *store.Store, q Publisher, masterKey [32]byte, pol ssrf.Policy, limits *ratelimit.Registry, token string) *Server {
-	return &Server{store: s, queue: q, masterKey: masterKey, policy: pol, limits: limits, tokenDigest: digest(token)}
+func New(s *store.Store, q Publisher, masterKey [32]byte, pol ssrf.Policy, limits *ratelimit.Registry, token string, replayAge time.Duration) *Server {
+	return &Server{store: s, queue: q, masterKey: masterKey, policy: pol, limits: limits, tokenDigest: digest(token), replayAge: replayAge}
 }
 
 func (s *Server) Handler() http.Handler {

@@ -5,13 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mit112/hookrail/internal/ratelimit"
 	"github.com/mit112/hookrail/internal/ssrf"
 )
 
 func TestOpsRoutesExemptAndV1Guarded(t *testing.T) {
-	s := New(nil, nil, [32]byte{}, ssrf.Policy{}, ratelimit.NewRegistry(1, 1), "tok")
+	s := New(nil, nil, [32]byte{}, ssrf.Policy{}, ratelimit.NewRegistry(1, 1), "tok", time.Hour)
 	h := s.Handler()
 
 	// health/metrics must NOT require auth (design F17)

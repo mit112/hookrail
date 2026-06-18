@@ -62,7 +62,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.AdminListen,
-		Handler:           admin.New(s, q, cfg.MasterKey, pol, ratelimit.NewRegistry(500, 1000), cfg.AdminToken).Handler(),
+		Handler:           admin.New(s, q, cfg.MasterKey, pol, ratelimit.NewRegistry(500, 1000), cfg.AdminToken, cfg.EventPayloadRetention).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
