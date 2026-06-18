@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/mit112/hookrail/internal/config"
 	"github.com/mit112/hookrail/internal/obs"
@@ -51,6 +54,12 @@ func main() {
 		slog.Error("ensure group", "err", err)
 		os.Exit(1)
 	}
+
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", promhttp.Handler())
+		_ = (&http.Server{Addr: ":8083", Handler: mux, ReadHeaderTimeout: 5 * time.Second}).ListenAndServe()
+	}()
 
 	sw := &scheduler.Sweeper{Source: s, Publisher: q, Interval: 30 * time.Second, BatchSize: 1000}
 	slog.Info("hookrail-scheduler started", "interval", sw.Interval)
