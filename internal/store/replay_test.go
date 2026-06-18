@@ -148,3 +148,85 @@ func TestReplayClassification(t *testing.T) {
 		t.Fatalf("deleted-target = %v, want Conflict", o)
 	}
 }
+
+// TestReplayAfterTombstoneSerializesCorrectly: the tombstone guard in
+// ReplayDeadLetter takes FOR UPDATE on the events row that TombstoneEventPayloads
+// also locks. Run sequentially: tombstone empties the payload first; a subsequent
+// replay whose CAS would otherwise succeed sees payload_size==0 and returns
+// ReplayGone — the delivery stays dead_lettered.
+func TestReplayAfterTombstoneSerializesCorrectly(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Seed an event + dead-lettered delivery (seedDead does: pending → dead_lettered + DL insert).
+	id := seedDead(t, s, "tsr.*")
+
+	// Age the event created_at so tombstone considers it (age=30d).
+	_, _ = s.Pool.Exec(ctx, `UPDATE events SET created_at = now() - interval '31 days' WHERE id = (SELECT event_id FROM deliveries WHERE id=$1)`, id)
+	// dead_at = 35d ago: EXPIRED for tombstone (age=30d), but within replay window (replayAge=40d).
+	_, _ = s.Pool.Exec(ctx, `UPDATE dead_letters SET dead_at = now() - interval '35 days' WHERE delivery_id=$1`, id)
+
+	// 1. Tombstone first — empties the payload (dead_at is expired from its 30d perspective).
+	n, err := s.TombstoneEventPayloads(ctx, 30*24*time.Hour, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("tombstone must empty at least one payload")
+	}
+
+	// Verify payload_size is 0.
+	var psize int
+	_ = s.Pool.QueryRow(ctx,
+		`SELECT e.payload_size FROM events e JOIN deliveries d ON d.event_id = e.id WHERE d.id=$1`, id).Scan(&psize)
+	if psize != 0 {
+		t.Fatalf("payload_size = %d, want 0 after tombstone", psize)
+	}
+
+	// 2. Replay with larger replayAge (40d) — CAS wins (dead_at >= now()-40d), but guard sees payload_size==0.
+	out, err := s.ReplayDeadLetter(ctx, id, 40*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != store.ReplayGone {
+		t.Fatalf("replay after tombstone = %v, want ReplayGone", out)
+	}
+
+	// Delivery must NOT be re-armed to pending.
+	var state string
+	_ = s.Pool.QueryRow(ctx, `SELECT state::text FROM deliveries WHERE id=$1`, id).Scan(&state)
+	if state != "dead_lettered" {
+		t.Fatalf("state = %q, want dead_lettered (not re-armed)", state)
+	}
+
+	// replayed_at must be rolled back to NULL.
+	var replayedAt *time.Time
+	_ = s.Pool.QueryRow(ctx, `SELECT replayed_at FROM dead_letters WHERE delivery_id=$1`, id).Scan(&replayedAt)
+	if replayedAt != nil {
+		t.Fatal("replayed_at must be NULL (tx rolled back)")
+	}
+}
+
+// TestReplayOKWhenPayloadIntact: a non-tombstoned event replays to ReplayOK
+// and re-arms to pending (negative control for the tombstone guard).
+func TestReplayOKWhenPayloadIntact(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	id := seedDead(t, s, "rpi.*")
+
+	// Payload is intact (not tombstoned) — replay must succeed.
+	out, err := s.ReplayDeadLetter(ctx, id, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != store.ReplayOK {
+		t.Fatalf("replay = %v, want ReplayOK", out)
+	}
+
+	var state string
+	_ = s.Pool.QueryRow(ctx, `SELECT state::text FROM deliveries WHERE id=$1`, id).Scan(&state)
+	if state != "pending" {
+		t.Fatalf("state = %q, want pending (re-armed)", state)
+	}
+}

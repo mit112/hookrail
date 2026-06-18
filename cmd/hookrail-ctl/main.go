@@ -22,8 +22,15 @@ func usage() {
 }
 
 func wantsHelp(args []string) bool {
-	for _, a := range args {
-		if a == "--help" || a == "-h" || a == "help" {
+	if len(args) == 0 {
+		return false
+	}
+	// Only check command-position args, not topic values etc.
+	if args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		return true
+	}
+	if len(args) >= 2 {
+		if args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
 			return true
 		}
 	}

@@ -19,7 +19,7 @@ const (
 
 // ReplayDeadLetter atomically re-arms a dead-lettered delivery (design §4.1).
 // One tx: (1) atomic replay-claim CAS — exactly one concurrent winner;
-// (2) deleted-target guard; (3) fenced delivery reset (claim_version UNTOUCHED).
+// (2a) tombstone guard; (2) deleted-target guard; (3) fenced delivery reset (claim_version UNTOUCHED).
 // On a CAS miss it classifies 404/409/410 from a read-back. Best-effort XADD
 // is the caller's job after commit.
 func (s *Store) ReplayDeadLetter(ctx context.Context, deliveryID string, replayAge time.Duration) (ReplayOutcome, error) {
@@ -43,6 +43,24 @@ func (s *Store) ReplayDeadLetter(ctx context.Context, deliveryID string, replayA
 		// for a second, exhausting a small pool (CI: MaxConns=4) → deadlock.
 		_ = tx.Rollback(ctx)
 		return s.classifyReplayMiss(ctx, deliveryID, replayAge) // read-only, own queries
+	}
+
+	// (2a) tombstone guard: serialize against TombstoneEventPayloads on the events row.
+	// TombstoneEventPayloads takes FOR UPDATE SKIP LOCKED on events and sets payload_size=0;
+	// payload_size==0 can ONLY result from a tombstone (legit min payload is `{}` = 2 bytes,
+	// payload is JSONB NOT NULL and required by the API). If tombstone won the row first, our
+	// FOR UPDATE blocks until it commits, we read 0, and return ReplayGone (410) — never re-arm
+	// a delivery with an emptied payload. If we win the row first, tombstone's SKIP LOCKED skips
+	// this event and the payload stays intact.
+	var psize int
+	if err := tx.QueryRow(ctx,
+		`SELECT e.payload_size FROM events e
+		 JOIN deliveries d ON d.event_id = e.id
+		 WHERE d.id = $1 FOR UPDATE OF e`, deliveryID).Scan(&psize); err != nil {
+		return ReplayConflict, err
+	}
+	if psize == 0 {
+		return ReplayGone, nil // payload reclaimed by retention → not replayable (rollback via defer)
 	}
 
 	// (3a) deleted-target guard: never resurrect a deleted destination.

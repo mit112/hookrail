@@ -15,6 +15,7 @@ func TestCtlHelpHasNoSideEffects(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil { //nolint:gosec
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	// help-positional args must exit 0 without touching config/DB.
 	for _, args := range [][]string{
 		{"--help"}, {"-h"}, {"help"},
 		{"migrate", "--help"}, {"seed", "--help"}, {"retention", "--help"},
@@ -24,5 +25,12 @@ func TestCtlHelpHasNoSideEffects(t *testing.T) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("ctl %v: help must exit 0 with no env, got %v\n%s", args, err, out)
 		}
+	}
+	// Non-command-position "help" must NOT short-circuit help dispatch.
+	// "seed --topic help" → config.Load fails (no DATABASE_URL) → nonzero.
+	cmd := exec.Command(bin, "seed", "--topic", "help") //nolint:gosec
+	cmd.Env = []string{}
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("ctl seed --topic help: must exit nonzero (no env), got exit 0\n%s", out)
 	}
 }
