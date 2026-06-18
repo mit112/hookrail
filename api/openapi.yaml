@@ -63,12 +63,375 @@ paths:
                       type: object
                       properties:
                         delivery_id: { type: string }
-                        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered] }
+                        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled] }
                         attempts: { type: array, items: { type: object } }
         "404": { $ref: "#/components/responses/Problem" }
+
+  # ── Admin surface (P1) ──────────────────────────────────────────────────────
+  # Every admin operation carries :8082 servers + bearer adminToken.
+
+  /v1/endpoints:
+    post:
+      summary: Create an endpoint
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointCreated"
+        "400": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    get:
+      summary: List endpoints (keyset-paginated)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Endpoint"
+                  next_cursor: { type: string }
+
+  /v1/endpoints/{id}:
+    get:
+      summary: Get an endpoint
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Endpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Endpoint"
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      summary: Update endpoint fields (partial)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string }
+                description: { type: string }
+      responses:
+        "204":
+          description: Updated (no body)
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      summary: Soft-delete an endpoint (and its subscriptions)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "204":
+          description: Deleted (no body)
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/endpoints/{id}/rotate-secret:
+    post:
+      summary: Rotate endpoint secret
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: New secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretRotated"
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/subscriptions:
+    post:
+      summary: Create a subscription
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic_pattern, endpoint_id, max_attempts]
+              properties:
+                topic_pattern: { type: string }
+                endpoint_id: { type: string }
+                max_attempts: { type: integer }
+                rate_limit_rps: { type: number, nullable: true }
+                backoff_policy: { type: object, nullable: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IDCreated"
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    get:
+      summary: List subscriptions
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: endpoint_id, schema: { type: string } }
+      responses:
+        "200":
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Subscription"
+                  next_cursor: { type: string }
+
+  /v1/subscriptions/{id}:
+    get:
+      summary: Get a subscription
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Subscription
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      summary: Update subscription fields (partial)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                active: { type: boolean }
+                max_attempts: { type: integer }
+                rate_limit_rps: { type: number, nullable: true }
+                backoff_policy: { type: object, nullable: true }
+      responses:
+        "204":
+          description: Updated (no body)
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      summary: Soft-delete a subscription
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "204":
+          description: Deleted (no body)
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/dlq:
+    get:
+      summary: List dead-letter queue
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: endpoint_id, schema: { type: string } }
+        - { in: query, name: since, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DeadLetter"
+                  next_cursor: { type: string }
+
+  /v1/dlq/{delivery_id}/replay:
+    post:
+      summary: Replay a dead-letter delivery
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: delivery_id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Replayed"
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "410": { $ref: "#/components/responses/Problem" }
+
+  /v1/deliveries:
+    get:
+      summary: List deliveries (keyset-paginated)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: state, schema: { type: string } }
+        - { in: query, name: endpoint_id, schema: { type: string } }
+        - { in: query, name: topic_pattern, schema: { type: string } }
+        - { in: query, name: event_id, schema: { type: string } }
+      responses:
+        "200":
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DeliveryListItem"
+                  next_cursor: { type: string }
+
+  /v1/deliveries/{id}:
+    get:
+      summary: Get delivery timeline
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryTimeline"
+        "404": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     producerKey: { type: http, scheme: bearer }
+    adminToken: { type: http, scheme: bearer, description: "HOOKRAIL_ADMIN_TOKEN — internal admin surface only" }
+  schemas:
+    Endpoint:
+      type: object
+      required: [id, url]
+      properties:
+        id: { type: string }
+        url: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        deleted_at: { type: string, format: date-time, nullable: true }
+    EndpointCreated:
+      type: object
+      required: [id, url, secret]
+      properties:
+        id: { type: string }
+        url: { type: string }
+        secret: { type: string }
+    SecretRotated:
+      type: object
+      required: [secret]
+      properties: { secret: { type: string } }
+    Subscription:
+      type: object
+      required: [id, topic_pattern, endpoint_id, max_attempts, active]
+      properties:
+        id: { type: string }
+        topic_pattern: { type: string }
+        endpoint_id: { type: string }
+        max_attempts: { type: integer }
+        rate_limit_rps: { type: number, nullable: true }
+        backoff_policy: { type: object, nullable: true }
+        active: { type: boolean }
+        deleted_at: { type: string, format: date-time, nullable: true }
+    IDCreated:
+      type: object
+      required: [id]
+      properties: { id: { type: string } }
+    DeadLetter:
+      type: object
+      required: [delivery_id, final_error, dead_at]
+      properties:
+        delivery_id: { type: string }
+        endpoint_id: { type: string, nullable: true }
+        final_error: { type: string }
+        dead_at: { type: string, format: date-time }
+        replayed_at: { type: string, format: date-time, nullable: true }
+    Replayed:
+      type: object
+      required: [delivery_id, state]
+      properties: { delivery_id: { type: string }, state: { type: string } }
+    DeliveryListItem:
+      type: object
+      required: [id, event_id, endpoint_id, state]
+      properties:
+        id: { type: string }
+        event_id: { type: string }
+        endpoint_id: { type: string }
+        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled] }
+    DeliveryTimeline:
+      type: object
+      required: [delivery_id, state, attempts_truncated, attempts]
+      properties:
+        delivery_id: { type: string }
+        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled] }
+        attempts_truncated: { type: boolean }
+        attempts: { type: array, items: { type: object } }
   responses:
     Problem:
       description: RFC 7807 problem
