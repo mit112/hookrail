@@ -207,6 +207,78 @@ func TestReplayAfterTombstoneSerializesCorrectly(t *testing.T) {
 	}
 }
 
+// TestReplayBlocksWhileTombstoneHoldsEventLock proves the FOR UPDATE OF e in
+// ReplayDeadLetter genuinely SERIALIZES against a concurrent tombstone holding the
+// events-row lock — not merely the post-commit sentinel read that the sequential
+// test above covers. A tx that holds FOR UPDATE on the event and has set
+// payload_size=0 (uncommitted) must BLOCK a concurrent replay's CAS-win path at the
+// guard; once it commits, replay reads 0 and returns ReplayGone (never re-arming).
+// Deterministic: the lock is physically held, so replay CANNOT return until commit —
+// the 750ms wait is a safe lower bound, not a timing race. If the FOR UPDATE were
+// deleted, replay would not block and would read the still-committed nonzero size →
+// ReplayOK (wrong) — so this test fails closed on a regression of the guard.
+func TestReplayBlocksWhileTombstoneHoldsEventLock(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id := seedDead(t, s, "rbt.*") // dead_at defaults to now() → CAS wins at replayAge=1h
+
+	// tx A: simulate an in-flight tombstone — lock the owning event FOR UPDATE and
+	// empty its payload, but DO NOT commit yet.
+	txA, err := s.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txA.Rollback(ctx) //nolint:errcheck
+	if _, err := txA.Exec(ctx,
+		`UPDATE events SET payload_size=0
+		 WHERE id = (SELECT event_id FROM deliveries WHERE id=$1)`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// Replay concurrently: it CAS-wins (touches dead_letters, which tx A does not hold)
+	// then must block on FOR UPDATE OF e against tx A's event-row lock.
+	done := make(chan store.ReplayOutcome, 1)
+	go func() {
+		o, err := s.ReplayDeadLetter(context.Background(), id, time.Hour)
+		if err != nil {
+			t.Errorf("replay: %v", err)
+		}
+		done <- o
+	}()
+
+	select {
+	case o := <-done:
+		t.Fatalf("replay returned %v while tombstone held the event lock — FOR UPDATE did not serialize", o)
+	case <-time.After(750 * time.Millisecond):
+		// good: replay is blocked on the events row lock
+	}
+
+	// Commit the tombstone → replay unblocks, reads payload_size=0 → ReplayGone.
+	if err := txA.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case o := <-done:
+		if o != store.ReplayGone {
+			t.Fatalf("replay after tombstone commit = %v, want ReplayGone", o)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("replay did not complete after tombstone committed")
+	}
+
+	// Delivery must NOT be re-armed; replayed_at must be rolled back to NULL.
+	var state string
+	_ = s.Pool.QueryRow(ctx, `SELECT state::text FROM deliveries WHERE id=$1`, id).Scan(&state)
+	if state != "dead_lettered" {
+		t.Fatalf("state = %q, want dead_lettered (not re-armed)", state)
+	}
+	var replayedAt *time.Time
+	_ = s.Pool.QueryRow(ctx, `SELECT replayed_at FROM dead_letters WHERE delivery_id=$1`, id).Scan(&replayedAt)
+	if replayedAt != nil {
+		t.Fatal("replayed_at must be NULL (replay tx rolled back)")
+	}
+}
+
 // TestReplayOKWhenPayloadIntact: a non-tombstoned event replays to ReplayOK
 // and re-arms to pending (negative control for the tombstone guard).
 func TestReplayOKWhenPayloadIntact(t *testing.T) {
