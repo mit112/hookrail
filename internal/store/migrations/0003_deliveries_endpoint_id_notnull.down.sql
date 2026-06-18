@@ -1,0 +1,1 @@
+ALTER TABLE deliveries ALTER COLUMN endpoint_id DROP NOT NULL;

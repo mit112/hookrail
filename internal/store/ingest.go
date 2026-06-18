@@ -65,15 +65,18 @@ func (s *Store) IngestEvent(ctx context.Context, p IngestParams) (IngestResult, 
 	// Topic matching evaluated at ingest (§3.1). Subscription counts are
 	// small in P0; match in Go for clarity.
 	rows, err := tx.Query(ctx,
-		`SELECT id, topic_pattern FROM subscriptions WHERE active`)
+		`SELECT s.id, s.topic_pattern, s.endpoint_id
+		 FROM subscriptions s
+		 JOIN endpoints e ON e.id = s.endpoint_id
+		 WHERE s.active AND s.deleted_at IS NULL AND e.deleted_at IS NULL`)
 	if err != nil {
 		return IngestResult{}, err
 	}
-	type sub struct{ id, pattern string }
+	type sub struct{ id, pattern, endpointID string }
 	var subs []sub
 	for rows.Next() {
 		var x sub
-		if err := rows.Scan(&x.id, &x.pattern); err != nil {
+		if err := rows.Scan(&x.id, &x.pattern, &x.endpointID); err != nil {
 			rows.Close()
 			return IngestResult{}, err
 		}
@@ -88,8 +91,8 @@ func (s *Store) IngestEvent(ctx context.Context, p IngestParams) (IngestResult, 
 		}
 		did := NewID()
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO deliveries (id, event_id, subscription_id) VALUES ($1, $2, $3)`,
-			did, eventID, x.id); err != nil {
+			`INSERT INTO deliveries (id, event_id, subscription_id, endpoint_id) VALUES ($1, $2, $3, $4)`,
+			did, eventID, x.id, x.endpointID); err != nil {
 			return IngestResult{}, fmt.Errorf("insert delivery: %w", err)
 		}
 		deliveryIDs = append(deliveryIDs, did)
