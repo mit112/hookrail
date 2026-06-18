@@ -108,5 +108,19 @@ func (s *Server) deleteEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// rotateSecret is filled in Task 10.
-func (s *Server) rotateSecret(w http.ResponseWriter, r *http.Request) { stub(w) }
+// rotateSecret generates a new endpoint secret and returns it once with
+// Cache-Control: no-store. Cutover is eventual (bounded by worker HTTP attempt
+// timeout). A deleted/absent endpoint returns 404.
+func (s *Server) rotateSecret(w http.ResponseWriter, r *http.Request) {
+	secret, err := s.store.RotateEndpointSecret(r.Context(), s.masterKey, r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			httpx.Problem(w, http.StatusNotFound, "not found", "no live endpoint with that id")
+			return
+		}
+		httpx.Problem(w, http.StatusServiceUnavailable, "rotate failed", "query error")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]string{"secret": secret})
+}

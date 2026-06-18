@@ -2,8 +2,12 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"time"
+
+	hcrypto "github.com/mit112/hookrail/internal/crypto"
 )
 
 type EndpointRow struct {
@@ -211,4 +215,29 @@ func nullJSON(b []byte) any {
 		return nil
 	}
 	return b
+}
+
+// RotateEndpointSecret generates a fresh whsec_ secret, encrypts it with the
+// master key, and atomically swaps the endpoint's secret_ciphertext. Returns
+// the plaintext secret once; caller must set Cache-Control: no-store.
+// A deleted/absent endpoint yields ErrNotFound (handler → 404).
+func (s *Store) RotateEndpointSecret(ctx context.Context, masterKey [32]byte, id string) (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	secret := "whsec_" + hex.EncodeToString(raw)
+	box, err := hcrypto.Encrypt(masterKey, []byte(secret))
+	if err != nil {
+		return "", err
+	}
+	ct, err := s.Pool.Exec(ctx,
+		`UPDATE endpoints SET secret_ciphertext=$2 WHERE id=$1 AND deleted_at IS NULL`, id, box)
+	if err != nil {
+		return "", err
+	}
+	if ct.RowsAffected() == 0 {
+		return "", ErrNotFound
+	}
+	return secret, nil
 }
