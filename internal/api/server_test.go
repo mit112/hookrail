@@ -98,7 +98,7 @@ func newServer(t *testing.T, q api.Publisher) (*httptest.Server, *store.Store, s
 	if _, err := s.CreateSubscription(ctx, "orders.*", epID, 8); err != nil {
 		t.Fatal(err)
 	}
-	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000))
+	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000), 24*time.Hour)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, s, key

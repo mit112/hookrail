@@ -46,6 +46,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer q.Close()
+	q.MaxLen = cfg.StreamMaxLen
 	if err := q.EnsureGroup(ctx); err != nil {
 		slog.Error("ensure group", "err", err)
 		os.Exit(1)

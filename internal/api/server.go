@@ -29,13 +29,14 @@ type Publisher interface {
 }
 
 type Server struct {
-	store  *store.Store
-	queue  Publisher
-	limits *ratelimit.Registry // per producer key (§10: floods → 429)
+	store   *store.Store
+	queue   Publisher
+	limits  *ratelimit.Registry // per producer key (§10: floods → 429)
+	idemTTL time.Duration
 }
 
-func New(s *store.Store, q Publisher, limits *ratelimit.Registry) *Server {
-	return &Server{store: s, queue: q, limits: limits}
+func New(s *store.Store, q Publisher, limits *ratelimit.Registry, idemTTL time.Duration) *Server {
+	return &Server{store: s, queue: q, limits: limits, idemTTL: idemTTL}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -91,7 +92,7 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		Topic:         req.Topic,
 		Payload:       req.Payload,
 		IdemKey:       r.Header.Get("Idempotency-Key"),
-		IdemTTL:       24 * time.Hour,
+		IdemTTL:       s.idemTTL,
 	})
 	switch {
 	case errors.Is(err, store.ErrIdempotencyConflict):

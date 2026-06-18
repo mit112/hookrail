@@ -44,10 +44,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer q.Close()
+	q.MaxLen = cfg.StreamMaxLen
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(s, q, ratelimit.NewRegistry(500, 1000)).Handler(),
+		Handler:           api.New(s, q, ratelimit.NewRegistry(500, 1000), cfg.IdemTTL).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

@@ -15,6 +15,7 @@ type Queue struct {
 	rdb    *redis.Client
 	stream string
 	group  string
+	MaxLen int64 // approximate XADD trim length (config RETENTION_STREAM_MAXLEN); default 100000
 }
 
 type Msg struct {
@@ -34,7 +35,7 @@ func New(addr, stream, group string) (*Queue, error) {
 	} else {
 		opts = &redis.Options{Addr: addr}
 	}
-	return &Queue{rdb: redis.NewClient(opts), stream: stream, group: group}, nil
+	return &Queue{rdb: redis.NewClient(opts), stream: stream, group: group, MaxLen: 100_000}, nil
 }
 
 func (q *Queue) Close() { _ = q.rdb.Close() }
@@ -54,7 +55,7 @@ func (q *Queue) EnsureGroup(ctx context.Context) error {
 func (q *Queue) Publish(ctx context.Context, deliveryID string) error {
 	return q.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: q.stream,
-		MaxLen: 100_000,
+		MaxLen: q.MaxLen,
 		Approx: true,
 		Values: map[string]any{"delivery_id": deliveryID},
 	}).Err()
