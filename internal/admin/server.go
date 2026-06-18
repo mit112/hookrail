@@ -71,6 +71,7 @@ func stub(w http.ResponseWriter) {
 	httpx.Problem(w, http.StatusNotImplemented, "not implemented", "filled in a later Slice A task")
 }
 
+//nolint:unused
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -79,6 +80,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // writePage emits {"items": [...], "next_cursor": "..."} where next_cursor is
 // the opaque keyset cursor for the next page (empty when the page is short).
+//nolint:unused
 func writePage(w http.ResponseWriter, items any, n, limit int, lastKey func() string) {
 	next := ""
 	if n == limit {
