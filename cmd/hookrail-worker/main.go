@@ -67,7 +67,11 @@ func main() {
 	host, _ := os.Hostname()
 	// Per-endpoint default; per-sub rps is P1 wiring. Default must clear the
 	// §11 baseline profiles (fan-out 3 at 200 ev/s = 200 rps/endpoint + retries).
-	limits := ratelimit.NewRegistry(envFloat("HOOKRAIL_DEFAULT_RPS", 1000), envFloat("HOOKRAIL_DEFAULT_BURST", 2000))
+	defRPS := envFloat("HOOKRAIL_DEFAULT_RPS", 1000)
+	defBurst := envFloat("HOOKRAIL_DEFAULT_BURST", 2000)
+	limits := ratelimit.NewRegistry(defRPS, defBurst)
+	el := &worker.EndpointLimits{Store: s, Registry: limits, Interval: 15 * time.Second, DefaultRate: defRPS, DefaultBurst: defBurst}
+	go el.Run(ctx)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.Handler())

@@ -59,3 +59,30 @@ func (r *Registry) Allow(key string, now time.Time) bool {
 	r.mu.Unlock()
 	return b.Allow(now)
 }
+
+// SetRate reconfigures an existing bucket's rate and burst (design §4.3:
+// per-key reconfiguration; buckets were immutable in P0). Tokens are clamped
+// to the new burst so a shrink takes effect immediately.
+func (b *Bucket) SetRate(rate, burst float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rate = rate
+	b.burst = burst
+	if b.tokens > burst {
+		b.tokens = burst
+	}
+}
+
+// SetRate gets-or-creates the key's bucket and reconfigures it.
+func (r *Registry) SetRate(key string, rate, burst float64) {
+	r.mu.Lock()
+	b, ok := r.buckets[key]
+	if !ok {
+		b = NewBucket(rate, burst)
+		r.buckets[key] = b
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
+	b.SetRate(rate, burst)
+}
