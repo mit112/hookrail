@@ -1,6 +1,7 @@
 // hookrail-ctl is the P0 stand-in for the admin API (P1): `seed` creates a
 // producer key, endpoint, and subscription so the demo/e2e/baseline can run;
-// `migrate` applies migrations and exits (the compose one-shot job).
+// `migrate` applies migrations and exits (the compose one-shot job);
+// `retention --once` runs one janitor tick (ops escape hatch, §3).
 package main
 
 import (
@@ -11,14 +12,32 @@ import (
 	"os"
 
 	"github.com/mit112/hookrail/internal/config"
+	"github.com/mit112/hookrail/internal/scheduler"
 	"github.com/mit112/hookrail/internal/ssrf"
 	"github.com/mit112/hookrail/internal/store"
 )
 
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate|retention> [flags]")
+}
+
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "--help" || a == "-h" || a == "help" {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate> [flags]")
+		usage()
 		os.Exit(2)
+	}
+	if wantsHelp(os.Args[1:]) { // help NEVER loads config or opens the DB
+		usage()
+		os.Exit(0)
 	}
 	if os.Args[1] == "migrate" {
 		cfg, err := config.Load()
@@ -39,8 +58,38 @@ func main() {
 		fmt.Println("migrations applied")
 		return
 	}
+	if os.Args[1] == "retention" {
+		fs := flag.NewFlagSet("retention", flag.ExitOnError)
+		once := fs.Bool("once", false, "run one retention tick and exit")
+		_ = fs.Parse(os.Args[2:])
+		if !*once {
+			fmt.Fprintln(os.Stderr, "usage: hookrail-ctl retention --once")
+			os.Exit(2)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		s, err := store.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			slog.Error("store", "err", err)
+			os.Exit(1)
+		}
+		defer s.Close()
+		j := &scheduler.Janitor{
+			Store: s, PayloadAge: cfg.EventPayloadRetention, AttemptAge: cfg.AttemptRetention,
+			Batch: cfg.RetentionBatch, TickBudget: cfg.RetentionTickBudget,
+		}
+		if err := j.RunOnce(context.Background()); err != nil {
+			slog.Error("retention had failures", "err", err) // RunOnce aggregates job errors + budget
+			os.Exit(1)
+		}
+		fmt.Println("retention tick complete")
+		return
+	}
 	if os.Args[1] != "seed" {
-		fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate> [flags]")
+		usage()
 		os.Exit(2)
 	}
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
