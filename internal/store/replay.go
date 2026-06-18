@@ -38,6 +38,10 @@ func (s *Store) ReplayDeadLetter(ctx context.Context, deliveryID string, replayA
 		return ReplayConflict, err
 	}
 	if ct.RowsAffected() == 0 {
+		// Release THIS tx's pooled connection before classifyReplayMiss acquires
+		// its own — otherwise every concurrent miss holds one conn while waiting
+		// for a second, exhausting a small pool (CI: MaxConns=4) → deadlock.
+		_ = tx.Rollback(ctx)
 		return s.classifyReplayMiss(ctx, deliveryID, replayAge) // read-only, own queries
 	}
 
