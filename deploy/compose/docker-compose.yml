@@ -72,6 +72,18 @@ services:
       redis: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
 
+  admin:
+    build: ../..
+    command: ["hookrail-admin"]
+    environment:
+      <<: *hookrail-env
+      HOOKRAIL_ADMIN_TOKEN: "dev-admin-token"   # dev only; real deploys inject a secret (Slice E)
+    ports: ["8082:8082"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
   test-receiver:
     build: ../..
     command: ["test-receiver"]
