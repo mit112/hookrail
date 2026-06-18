@@ -26,6 +26,7 @@ type ClaimedDelivery struct {
 	EndpointID       string
 	URL              string
 	SecretCiphertext []byte
+	BackoffPolicy    []byte // raw JSONB from subscription's backoff_policy (per-delivery, nil → default)
 }
 
 // ClaimDelivery is the §3.4 CAS: exactly one claimant wins; a live lease
@@ -57,14 +58,14 @@ func (s *Store) ClaimDelivery(ctx context.Context, id string, lease time.Duratio
 			RETURNING id, event_id, subscription_id, attempt_count, claim_version
 		)
 		SELECT c.id, c.event_id, c.subscription_id, c.attempt_count, c.claim_version,
-		       sub.max_attempts, e.topic, e.payload, ep.id, ep.url, ep.secret_ciphertext
+		       sub.max_attempts, e.topic, e.payload, ep.id, ep.url, ep.secret_ciphertext, sub.backoff_policy
 		FROM claimed c
 		JOIN events e ON e.id = c.event_id
 		JOIN subscriptions sub ON sub.id = c.subscription_id
 		JOIN endpoints ep ON ep.id = sub.endpoint_id`,
 		id, lease,
 	).Scan(&d.ID, &d.EventID, &d.SubscriptionID, &d.AttemptCount, &d.ClaimVersion,
-		&d.MaxAttempts, &d.Topic, &d.Payload, &d.EndpointID, &d.URL, &d.SecretCiphertext)
+		&d.MaxAttempts, &d.Topic, &d.Payload, &d.EndpointID, &d.URL, &d.SecretCiphertext, &d.BackoffPolicy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ClaimedDelivery{}, nil // someone else owns it — ack & drop
 	}

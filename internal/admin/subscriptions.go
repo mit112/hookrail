@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/mit112/hookrail/internal/backoff"
 	"github.com/mit112/hookrail/internal/httpx"
 	"github.com/mit112/hookrail/internal/store"
 )
@@ -34,6 +35,12 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxAttempts == 0 {
 		req.MaxAttempts = 8
+	}
+	if len(req.BackoffPolicy) > 0 {
+		if err := backoff.Validate(req.BackoffPolicy); err != nil {
+			httpx.Problem(w, http.StatusUnprocessableEntity, "invalid backoff_policy", err.Error())
+			return
+		}
 	}
 	id, err := s.store.CreateSubscriptionFull(r.Context(), store.SubInput{
 		TopicPattern: req.TopicPattern, EndpointID: req.EndpointID,
@@ -96,6 +103,12 @@ func (s *Server) patchSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	if len(req.BackoffPolicy) > 0 {
+		if err := backoff.Validate(req.BackoffPolicy); err != nil {
+			httpx.Problem(w, http.StatusUnprocessableEntity, "invalid backoff_policy", err.Error())
+			return
+		}
+	}
 	err := s.store.UpdateSubscription(r.Context(), id, req.Active, req.MaxAttempts, req.RateLimitRPS,
 		req.BackoffPolicy, len(req.BackoffPolicy) > 0)
 	switch {

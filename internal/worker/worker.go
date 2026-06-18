@@ -174,7 +174,8 @@ func (w *Worker) attempt(ctx context.Context, d store.ClaimedDelivery) (res stor
 }
 
 func (w *Worker) record(ctx context.Context, d store.ClaimedDelivery, res store.AttemptResult) {
-	switch err := w.Store.CompleteAttempt(ctx, res, w.Backoff, d.MaxAttempts); {
+	pol := backoff.FromJSON(d.BackoffPolicy, d.MaxAttempts) // per-delivery (design §4.3); nil → w.Backoff-equivalent default
+	switch err := w.Store.CompleteAttempt(ctx, res, pol, d.MaxAttempts); {
 	case err == nil:
 	case errors.Is(err, store.ErrStaleClaim):
 		// our lease expired and another worker owns this delivery now —
