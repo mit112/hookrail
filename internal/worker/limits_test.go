@@ -51,3 +51,22 @@ func TestEndpointLimitsRevertsRemoved(t *testing.T) {
 		t.Fatalf("after removal the endpoint stayed throttled (allowed=%d/50) — stale override not reverted", allowed)
 	}
 }
+
+// A valid low rps (chk_rate only requires > 0) whose 2x burst is < 1 must still
+// deliver: without the burst floor, the bucket never accrues a full token and
+// delivery to that endpoint stalls forever (Codex M-A4a pre-gate BLOCKER).
+func TestEndpointLimitsLowRateStillDelivers(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	epID, _, _ := s.CreateEndpoint(ctx, [32]byte{}, "https://example.com/h", "")
+	slow := 0.1 // burst would be 0.2 (< 1) without the floor
+	_, _ = s.CreateSubscriptionFull(ctx, store.SubInput{TopicPattern: "s.*", EndpointID: epID, MaxAttempts: 3, RateLimitRPS: &slow})
+
+	reg := ratelimit.NewRegistry(1000, 2000)
+	el := &worker.EndpointLimits{Store: s, Registry: reg, Interval: time.Hour, DefaultRate: 1000, DefaultBurst: 2000}
+	el.Refresh(ctx)
+
+	if !reg.Allow(epID, time.Now()) {
+		t.Fatal("a 0.1 rps endpoint must deliver at least once (burst floored to 1); delivery would stall forever otherwise")
+	}
+}

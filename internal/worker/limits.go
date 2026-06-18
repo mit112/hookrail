@@ -49,7 +49,15 @@ func (e *EndpointLimits) Refresh(ctx context.Context) {
 	}
 	next := make(map[string]struct{}, len(limits))
 	for ep, rps := range limits {
-		e.Registry.SetRate(ep, rps, rps*2)
+		// burst is normally 2x the rate, but a sub-1 burst can never accrue a
+		// full token (bucket.go Allow needs tokens >= 1), so a valid low rps
+		// (chk_rate only requires > 0, e.g. 0.1) would stall delivery to that
+		// endpoint forever. Floor the burst at 1 so low rates still deliver.
+		burst := rps * 2
+		if burst < 1 {
+			burst = 1
+		}
+		e.Registry.SetRate(ep, rps, burst)
 		next[ep] = struct{}{}
 	}
 	// Reconcile removals: an endpoint whose last limiting sub was paused,

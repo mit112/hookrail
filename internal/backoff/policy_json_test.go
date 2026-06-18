@@ -22,6 +22,8 @@ func TestValidate(t *testing.T) {
 		`{nope`,                                                 // malformed
 		`{"base_ms":1,"cap_ms":1,"max_attempts":3}`,             // unknown field
 		fmt.Sprintf(`{"base_ms":1,"cap_ms":%d}`, math.MaxInt64), // above MaxPolicyMS
+		`{"base_ms":1,"cap_ms":1} trailing`,                     // trailing data (would be 503 on INSERT, not 422)
+		`{"base_ms":1,"cap_ms":1}{"base_ms":2,"cap_ms":2}`,      // two objects
 	}
 	for _, b := range bad {
 		if err := Validate([]byte(b)); err == nil {

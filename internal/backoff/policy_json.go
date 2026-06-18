@@ -33,6 +33,12 @@ func Validate(raw []byte) error {
 	if err := dec.Decode(&p); err != nil {
 		return errors.New("backoff_policy: malformed JSON or unknown field")
 	}
+	// Reject trailing data: json.Decoder.Decode reads one value and ignores the
+	// rest, so `{...} garbage` would otherwise pass here and only fail later as
+	// invalid JSONB on INSERT — surfacing as a 503 instead of the required 422.
+	if dec.More() {
+		return errors.New("backoff_policy: unexpected trailing data after the JSON object")
+	}
 	if p.BaseMS == nil || p.CapMS == nil {
 		return errors.New("backoff_policy: base_ms and cap_ms are required")
 	}
