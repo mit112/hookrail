@@ -29,4 +29,10 @@ var (
 		Name: "hookrail_sweeper_republished_total",
 		Help: "Deliveries republished by the PG sweeper (due + stuck).",
 	})
+
+	RetentionRowsPruned = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "hookrail_retention_rows_pruned_total", Help: "Rows pruned by the retention janitor, by job."},
+		[]string{"job"})
+	RetentionTickSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "hookrail_retention_tick_seconds", Help: "Wall-clock duration of one retention tick."})
 )

@@ -62,6 +62,16 @@ func main() {
 	}()
 
 	sw := &scheduler.Sweeper{Source: s, Publisher: q, Interval: 30 * time.Second, BatchSize: 1000}
+
+	if cfg.RetentionEnabled {
+		j := &scheduler.Janitor{
+			Store: s, PayloadAge: cfg.EventPayloadRetention, AttemptAge: cfg.AttemptRetention,
+			Batch: cfg.RetentionBatch, Interval: cfg.RetentionInterval, TickBudget: cfg.RetentionTickBudget,
+		}
+		go j.Run(ctx)
+		slog.Info("retention janitor started", "interval", cfg.RetentionInterval)
+	}
+
 	slog.Info("hookrail-scheduler started", "interval", sw.Interval)
 	if err := sw.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("sweeper exited", "err", err)
