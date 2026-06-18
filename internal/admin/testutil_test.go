@@ -39,6 +39,48 @@ type noQueue struct{ published []string }
 func (n *noQueue) Publish(_ context.Context, id string) error { n.published = append(n.published, id); return nil }
 func (n *noQueue) Ping(context.Context) error                 { return nil }
 
+// seedPipeline creates a producer key, endpoint, and one subscription matching
+// pattern, returning the producer key id (mirrors the store test helper).
+func seedPipeline(t *testing.T, s *store.Store, pattern string) string {
+	t.Helper()
+	ctx := context.Background()
+	keyID, _, err := s.CreateProducerKey(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	epID, _, err := s.CreateEndpoint(ctx, [32]byte{}, "https://example.com/h", "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSubscriptionFull(ctx, store.SubInput{TopicPattern: pattern, EndpointID: epID, MaxAttempts: 3}); err != nil {
+		t.Fatal(err)
+	}
+	return keyID
+}
+
+// seedDeadLetter ingests one event and drives its single delivery to
+// dead_lettered via direct SQL (so DLQ/replay tests need no live worker).
+func seedDeadLetter(t *testing.T, s *store.Store, pattern string) string {
+	t.Helper()
+	ctx := context.Background()
+	keyID := seedPipeline(t, s, pattern)
+	res, err := s.IngestEvent(ctx, store.IngestParams{ProducerKeyID: keyID, Topic: strings.Replace(pattern, "*", "x", 1), Payload: []byte(`{}`)})
+	if err != nil || len(res.DeliveryIDs) != 1 {
+		t.Fatalf("seed ingest: %v", err)
+	}
+	id := res.DeliveryIDs[0]
+	if _, err := s.Pool.Exec(ctx,
+		`UPDATE deliveries SET state='dead_lettered', lease_until=NULL WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Pool.Exec(ctx,
+		`INSERT INTO dead_letters (delivery_id, final_error, endpoint_id)
+		 SELECT id, 'seeded', endpoint_id FROM deliveries WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func newServer(t *testing.T) (*admin.Server, *store.Store) {
 	t.Helper()
 	ctx := context.Background()
