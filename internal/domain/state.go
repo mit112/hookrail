@@ -11,16 +11,18 @@ const (
 	StateRetryScheduled State = "retry_scheduled"
 	StateSucceeded      State = "succeeded"
 	StateDeadLettered   State = "dead_lettered"
+	StateCancelled      State = "cancelled"
 )
 
 // validNext maps each state to the set of states it may move to.
 // dead_lettered -> pending is the manual-replay path only.
 var validNext = map[State]map[State]bool{
-	StatePending:        {StateInFlight: true},
-	StateRetryScheduled: {StateInFlight: true},
+	StatePending:        {StateInFlight: true, StateCancelled: true},
+	StateRetryScheduled: {StateInFlight: true, StateCancelled: true},
 	StateInFlight:       {StateSucceeded: true, StateRetryScheduled: true, StateDeadLettered: true},
 	StateDeadLettered:   {StatePending: true},
 	StateSucceeded:      {},
+	StateCancelled:      {},
 }
 
 func CanTransition(from, to State) bool {
@@ -30,5 +32,5 @@ func CanTransition(from, to State) bool {
 // IsTerminalForWorker reports whether workers must never touch this
 // delivery again. dead_lettered is excluded: it has a manual replay exit.
 func (s State) IsTerminalForWorker() bool {
-	return s == StateSucceeded
+	return s == StateSucceeded || s == StateCancelled
 }

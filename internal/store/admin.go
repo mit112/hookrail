@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	hcrypto "github.com/mit112/hookrail/internal/crypto"
 )
 
@@ -88,6 +90,11 @@ func (s *Store) SoftDeleteEndpoint(ctx context.Context, id string) error {
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE subscriptions SET deleted_at=now() WHERE endpoint_id=$1 AND deleted_at IS NULL`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE deliveries SET state='cancelled', lease_until=NULL, updated_at=now()
+		 WHERE endpoint_id=$1 AND state IN ('pending','retry_scheduled')`, id); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -193,14 +200,49 @@ func (s *Store) UpdateSubscription(ctx context.Context, id string, active *bool,
 }
 
 func (s *Store) SoftDeleteSubscription(ctx context.Context, id string) error {
-	ct, err := s.Pool.Exec(ctx, `UPDATE subscriptions SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`, id)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	ct, err := tx.Exec(ctx, `UPDATE subscriptions SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`, id)
 	if err != nil {
 		return err
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if _, err := tx.Exec(ctx,
+		`UPDATE deliveries SET state='cancelled', lease_until=NULL, updated_at=now()
+		 WHERE subscription_id=$1 AND state IN ('pending','retry_scheduled')`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CancelOrphaned cancels non-terminal deliveries whose subscription is
+// soft-deleted — the straggler reconciliation (design §4.2). Bounded by batch
+// (FOR UPDATE SKIP LOCKED).
+func (s *Store) CancelOrphaned(ctx context.Context, batch int) (int, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	ct, err := tx.Exec(ctx,
+		`UPDATE deliveries SET state='cancelled', lease_until=NULL, updated_at=now()
+		 WHERE id IN (
+		   SELECT d.id FROM deliveries d
+		   JOIN subscriptions s ON s.id = d.subscription_id
+		   WHERE s.deleted_at IS NOT NULL AND d.state IN ('pending','retry_scheduled')
+		   LIMIT $1 FOR UPDATE OF d SKIP LOCKED)`, batch)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(ct.RowsAffected()), nil
 }
 
 // SubscriptionExists checks if a subscription with the given id exists (including soft-deleted).
