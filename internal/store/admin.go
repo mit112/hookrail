@@ -220,15 +220,13 @@ func (s *Store) SoftDeleteSubscription(ctx context.Context, id string) error {
 	return tx.Commit(ctx)
 }
 
-// CancelOrphaned cancels non-terminal deliveries whose subscription is
+// cancelOrphanedTx cancels non-terminal deliveries whose subscription is
 // soft-deleted — the straggler reconciliation (design §4.2). Bounded by batch
-// (FOR UPDATE SKIP LOCKED).
-func (s *Store) CancelOrphaned(ctx context.Context, batch int) (int, error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+// (FOR UPDATE SKIP LOCKED); honest bound is the reconciliation cadence (a
+// just-deleted target may get MORE THAN ONE late attempt within an interval,
+// not "at most one"). Takes a tx so the janitor can run it under an advisory
+// lock (M-A4b); CancelOrphaned wraps it in its own tx for standalone use.
+func cancelOrphanedTx(ctx context.Context, tx pgx.Tx, batch int) (int, error) {
 	ct, err := tx.Exec(ctx,
 		`UPDATE deliveries SET state='cancelled', lease_until=NULL, updated_at=now()
 		 WHERE id IN (
@@ -239,10 +237,23 @@ func (s *Store) CancelOrphaned(ctx context.Context, batch int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return int(ct.RowsAffected()), nil
+}
+
+func (s *Store) CancelOrphaned(ctx context.Context, batch int) (int, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	n, err := cancelOrphanedTx(ctx, tx, batch)
+	if err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return int(ct.RowsAffected()), nil
+	return n, nil
 }
 
 // SubscriptionExists checks if a subscription with the given id exists (including soft-deleted).
