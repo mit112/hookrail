@@ -14,6 +14,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // pgx5:// driver
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oklog/ulid/v2"
 )
@@ -39,6 +40,11 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 }
 
 func (s *Store) Close() { s.Pool.Close() }
+
+// ErrNotFound: admin lookups/updates that match no live row (handler → 404).
+var ErrNotFound = errors.New("store: not found")
+
+func pgxTxRW() pgx.TxOptions { return pgx.TxOptions{} }
 
 // Migrate applies all embedded migrations (golang-migrate, §5).
 func (s *Store) Migrate() error {
