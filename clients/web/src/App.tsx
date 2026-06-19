@@ -9,6 +9,7 @@ import { SubscriptionNew, SubscriptionEdit } from "./routes/SubscriptionForm";
 import { Deliveries } from "./routes/Deliveries";
 import { DeliveryTimeline } from "./routes/DeliveryTimeline";
 import { DLQ } from "./routes/DLQ";
+import { TestEvent } from "./routes/TestEvent";
 
 export function App() {
   return (
@@ -26,6 +27,7 @@ export function App() {
         <Route path="/deliveries" element={<Deliveries />} />
         <Route path="/deliveries/:id" element={<DeliveryTimeline />} />
         <Route path="/dlq" element={<DLQ />} />
+        <Route path="/test-event" element={<TestEvent />} />
       </Routes>
     </SessionGate>
   );
