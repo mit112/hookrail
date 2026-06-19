@@ -16,8 +16,10 @@ py-verify: py-lint py-typecheck py-test
 py-build: ; cd clients/python && uv build && uv run --with twine python -m twine check dist/* && bash scripts/py-install-smoke.sh
 py-e2e: ; bash clients/python/scripts/py-e2e.sh
 
-.PHONY: web-verify web-build
+.PHONY: web-verify web-build dashboard-assets
 web-verify:
 	cd clients/web && npm ci && npm run typecheck && npm run lint && npm run test && npm run build
 web-build:
 	cd clients/web && npm ci && npm run build
+dashboard-assets: web-build
+	cp -r clients/web/dist internal/dashboard/dist

@@ -43,6 +43,19 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
+  dashboard-provisioner:
+    build: ../..
+    user: "0:0"
+    restart: "no"
+    entrypoint: ["/bin/sh","-c"]
+    command:
+      - 'hookrail-ctl create-producer-key -name dashboard | awk -F= "/^producer_key=/{print \$2}" > /run/secrets/producer_key && chmod 0644 /run/secrets/producer_key'
+    environment: *hookrail-env
+    volumes: [dashboard-secret:/run/secrets]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
   api:
     build: ../..
     command: ["hookrail-api"]
@@ -113,3 +126,26 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:1.58
     ports: ["16686:16686"]
+
+  dashboard:
+    build:
+      context: ../..
+      target: dashboard
+    command: ["hookrail-dashboard"]
+    environment:
+      HOOKRAIL_ADMIN_TOKEN: dev-admin-token
+      HOOKRAIL_ADMIN_URL: http://admin:8082
+      HOOKRAIL_INGRESS_URL: http://api:8080
+      HOOKRAIL_DASHBOARD_PASSWORD: dev-dashboard-pw
+      HOOKRAIL_DASHBOARD_SESSION_KEY: dev-session-key-0123456789abcdef0123
+      HOOKRAIL_PRODUCER_KEY_FILE: /run/secrets/producer_key
+      HOOKRAIL_DASHBOARD_INSECURE_COOKIE: "true"
+    volumes: [dashboard-secret:/run/secrets:ro]
+    ports: ["8085:8085"]
+    depends_on:
+      admin: { condition: service_started }
+      api: { condition: service_started }
+      dashboard-provisioner: { condition: service_completed_successfully }
+
+volumes:
+  dashboard-secret:
