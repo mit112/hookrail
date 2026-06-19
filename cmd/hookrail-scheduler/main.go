@@ -39,10 +39,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.Close()
-	if err := s.Migrate(); err != nil { // idempotent self-heal; compose runs the dedicated migrate job first
-		slog.Error("migrate", "err", err)
-		os.Exit(1)
-	}
 	q, err := queue.New(cfg.RedisAddr, cfg.Stream, cfg.Group)
 	if err != nil {
 		slog.Error("queue", "err", err)
