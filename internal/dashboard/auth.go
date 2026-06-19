@@ -32,13 +32,15 @@ func NewServer(cfg Config) *Server {
 
 func (s *Server) cookieName() string { return "hk_dash" }
 
-// Temporary Handler() for Task 5 only — Task 9 replaces with full mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", s.handleLogin)
-	// Wired directly for now; Task 6 adds requireSession, Task 9 finalizes.
-	mux.HandleFunc("POST /api/logout", s.handleLogout)
-	mux.HandleFunc("GET /api/session", s.handleSession)
+	mux.HandleFunc("POST /api/logout", s.requireSession(s.handleLogout))
+	mux.HandleFunc("GET /api/session", s.requireSession(s.handleSession))
+	// Admin proxy allowlist (Task 7 — Task 9 finalizes with ops + static)
+	for _, rt := range s.adminRoutes() {
+		mux.HandleFunc(rt.method+" "+rt.path, s.requireSession(s.proxyAdmin))
+	}
 	return mux
 }
 
