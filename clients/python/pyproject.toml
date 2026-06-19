@@ -21,7 +21,7 @@ build-backend = "hatchling.build"
 packages = ["src/hookrail"]
 
 [dependency-groups]
-dev = ["pytest>=8", "respx>=0.21", "jsonschema>=4", "pyyaml>=6", "mypy>=1.10", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21", "jsonschema>=4", "pyyaml>=6", "mypy>=1.10", "ruff>=0.6"]
 
 [tool.ruff]
 line-length = 100
@@ -37,5 +37,6 @@ files = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = ["e2e: live tests against a running compose stack (opt-in)"]
 addopts = "-ra"
