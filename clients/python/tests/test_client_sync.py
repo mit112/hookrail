@@ -120,3 +120,18 @@ def test_public_exports_present() -> None:
         "__version__",
     ]:
         assert hasattr(hookrail, name)
+
+
+@respx.mock
+def test_retry_after_header_is_honored(monkeypatch: pytest.MonkeyPatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr("hookrail._client.time.sleep", lambda s: slept.append(s))
+    respx.post("http://t:8080/v1/events").mock(
+        side_effect=[
+            httpx.Response(429, json={"title": "slow down"}, headers={"Retry-After": "3"}),
+            httpx.Response(202, json={"event_id": "e", "delivery_ids": []}),
+        ]
+    )
+    with Hookrail(api_key="hk_x", base_url="http://t:8080") as c:
+        c.send_event("orders.created", {"id": 1})
+    assert slept and slept[0] >= 3.0  # never shorter than Retry-After
