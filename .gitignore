@@ -6,3 +6,7 @@ coverage.out
 reasonix.toml
 .reasonix-runs/
 .DS_Store
+
+clients/python/dist/
+clients/python/.venv/
+clients/python/**/__pycache__/

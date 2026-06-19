@@ -1,0 +1,41 @@
+[project]
+name = "hookrail"
+version = "0.1.0"
+description = "Python client for Hookrail — durable, at-least-once webhook delivery."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "mit112" }]
+keywords = ["webhooks", "hookrail", "events", "delivery"]
+dependencies = ["httpx>=0.27", "pydantic>=2.7"]
+
+[project.urls]
+Homepage = "https://github.com/mit112/hookrail"
+Source = "https://github.com/mit112/hookrail/tree/main/clients/python"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hookrail"]
+
+[dependency-groups]
+dev = ["pytest>=8", "respx>=0.21", "jsonschema>=4", "pyyaml>=6", "mypy>=1.10", "ruff>=0.6"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["e2e: live tests against a running compose stack (opt-in)"]
+addopts = "-ra"

@@ -7,3 +7,11 @@ up: ; docker compose -f deploy/compose/docker-compose.yml up -d --build
 down: ; docker compose -f deploy/compose/docker-compose.yml down -v
 seed: ; docker compose -f deploy/compose/docker-compose.yml run --rm api hookrail-ctl seed
 e2e: ; go test -tags e2e ./test/e2e -v -count=1
+
+.PHONY: py-lint py-typecheck py-test py-verify py-build py-e2e
+py-lint: ; cd clients/python && uv run ruff check . && uv run ruff format --check .
+py-typecheck: ; cd clients/python && uv run mypy src
+py-test: ; cd clients/python && uv run pytest -q -m "not e2e"
+py-verify: py-lint py-typecheck py-test
+py-build: ; cd clients/python && uv build && uv run --with twine python -m twine check dist/* && bash scripts/py-install-smoke.sh
+py-e2e: ; bash clients/python/scripts/py-e2e.sh
