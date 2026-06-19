@@ -1,3 +1,9 @@
+import { SessionGate } from "./auth/SessionGate";
+
 export function App() {
-  return <h1>Hookrail</h1>;
+  return (
+    <SessionGate>
+      <h1>Hookrail</h1>
+    </SessionGate>
+  );
 }
