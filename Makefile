@@ -1,4 +1,4 @@
-.PHONY: build test itest lint up down seed e2e
+.PHONY: build test itest lint up down seed e2e k8s-e2e
 build: ; go build ./...
 test: ; go test ./... -race -count=1
 itest: ; go test -tags integration ./... -race -count=1
@@ -24,3 +24,4 @@ web-build:
 dashboard-assets: web-build
 	cp -r clients/web/dist internal/dashboard/dist
 web-e2e: ; ROOT=$(CURDIR) bash scripts/web-e2e.sh && test "$$(docker compose -f deploy/compose/docker-compose.yml ps -q | wc -l | tr -d ' ')" = "0"
+k8s-e2e: ; bash scripts/k8s-e2e.sh
