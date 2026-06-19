@@ -8,6 +8,7 @@ import { App } from "./App";
 
 const server = setupServer(
   http.get("/api/session", () => HttpResponse.json({})),
+  http.get("/v1/endpoints", () => HttpResponse.json({ items: [], next_cursor: "" })),
 );
 beforeAll(() => server.listen());
 afterEach(() => server.resetHandlers());
@@ -23,6 +24,6 @@ describe("App", () => {
         </QueryClientProvider>
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/hookrail/i)).toBeInTheDocument();
+    expect(await screen.findByText(/endpoints/i)).toBeInTheDocument();
   });
 });
