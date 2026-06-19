@@ -4,6 +4,8 @@ import { Endpoints } from "./routes/Endpoints";
 import { EndpointDetail } from "./routes/EndpointDetail";
 import { Subscriptions } from "./routes/Subscriptions";
 import { SubscriptionDetail } from "./routes/SubscriptionDetail";
+import { Deliveries } from "./routes/Deliveries";
+import { DeliveryTimeline } from "./routes/DeliveryTimeline";
 
 export function App() {
   return (
@@ -14,6 +16,8 @@ export function App() {
         <Route path="/endpoints/:id" element={<EndpointDetail />} />
         <Route path="/subscriptions" element={<Subscriptions />} />
         <Route path="/subscriptions/:id" element={<SubscriptionDetail />} />
+        <Route path="/deliveries" element={<Deliveries />} />
+        <Route path="/deliveries/:id" element={<DeliveryTimeline />} />
       </Routes>
     </SessionGate>
   );

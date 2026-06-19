@@ -9,6 +9,7 @@ import { App } from "./App";
 const server = setupServer(
   http.get("/api/session", () => HttpResponse.json({})),
   http.get("/v1/endpoints", () => HttpResponse.json({ items: [], next_cursor: "" })),
+  http.get("/v1/deliveries", () => HttpResponse.json({ items: [], next_cursor: "" })),
 );
 beforeAll(() => server.listen());
 afterEach(() => server.resetHandlers());
