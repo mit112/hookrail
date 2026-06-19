@@ -45,6 +45,21 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: "1.24" }
       - run: ./scripts/e2e.sh
+  k8s-smoke:
+    if: github.ref == 'refs/heads/main'
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install k3d
+        run: curl -sSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.9.0 bash
+      - uses: azure/setup-kubectl@v4
+        with: { version: "v1.33.1" }
+      - name: Preflight (fail early if a tool is missing)
+        run: command -v k3d kubectl docker jq
+      - name: Ephemeral k3d e2e
+        run: bash scripts/k8s-e2e.sh
   image:
     if: github.ref == 'refs/heads/main'
     needs: [lint, test, integration]
