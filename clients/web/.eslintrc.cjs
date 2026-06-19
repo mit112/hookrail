@@ -11,5 +11,5 @@ module.exports = {
   rules: {
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
   },
-  ignorePatterns: ["dist/", "dist-ts/", "node_modules/"],
+  ignorePatterns: ["dist/", "dist-ts/", "node_modules/", "e2e/"],
 };

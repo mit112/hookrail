@@ -5,8 +5,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE="docker compose -f $ROOT/deploy/compose/docker-compose.yml"
 export HOOKRAIL_MASTER_KEY="${HOOKRAIL_MASTER_KEY:-000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f}"
 
-$COMPOSE up -d --build
+# Arm teardown BEFORE bringing the stack up, so a partial/failed `up` under
+# `set -e` still tears down (M-B4 0-container lesson).
 trap '$COMPOSE down -v' EXIT
+$COMPOSE up -d --build
 
 # wait for the dashboard health endpoint
 for i in $(seq 1 90); do
