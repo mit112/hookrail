@@ -88,6 +88,10 @@ paths:
       responses:
         "201":
           description: Created
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: "no-store (secret in body)"
           content:
             application/json:
               schema:
@@ -101,6 +105,7 @@ paths:
       parameters:
         - { in: query, name: cursor, schema: { type: string } }
         - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: include_deleted, schema: { type: boolean } }
       responses:
         "200":
           description: Paginated list
@@ -123,6 +128,7 @@ paths:
       security: [{ adminToken: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: include_deleted, schema: { type: boolean } }
       responses:
         "200":
           description: Endpoint
@@ -171,6 +177,10 @@ paths:
       responses:
         "200":
           description: New secret
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: "no-store (secret in body)"
           content:
             application/json:
               schema:
@@ -235,6 +245,7 @@ paths:
       security: [{ adminToken: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: include_deleted, schema: { type: boolean } }
       responses:
         "200":
           description: Subscription
@@ -286,6 +297,8 @@ paths:
         - { in: query, name: limit, schema: { type: integer } }
         - { in: query, name: endpoint_id, schema: { type: string } }
         - { in: query, name: since, schema: { type: string, format: date-time } }
+        - { in: query, name: replayed, schema: { type: boolean } }
+        - { in: query, name: until, schema: { type: string, format: date-time } }
       responses:
         "200":
           description: Paginated list
@@ -329,7 +342,7 @@ paths:
         - { in: query, name: limit, schema: { type: integer } }
         - { in: query, name: state, schema: { type: string } }
         - { in: query, name: endpoint_id, schema: { type: string } }
-        - { in: query, name: topic_pattern, schema: { type: string } }
+        - { in: query, name: topic, schema: { type: string } }
         - { in: query, name: event_id, schema: { type: string } }
       responses:
         "200":
