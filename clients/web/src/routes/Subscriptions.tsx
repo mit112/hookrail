@@ -32,6 +32,7 @@ export function Subscriptions() {
   return (
     <div>
       <h1>Subscriptions</h1>
+      <Link to="/subscriptions/new">New Subscription</Link>
       <table>
         <thead>
           <tr>

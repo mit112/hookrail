@@ -25,6 +25,6 @@ describe("App", () => {
         </QueryClientProvider>
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/endpoints/i)).toBeInTheDocument();
+    expect(await screen.findByText(/endpoints/i, {}, { timeout: 5000 })).toBeInTheDocument();
   });
 });

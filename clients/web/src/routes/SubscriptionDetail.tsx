@@ -36,6 +36,8 @@ export function SubscriptionDetail() {
           </>
         )}
       </dl>
+      <Link to={`/subscriptions/${data.id}/edit`}>Edit</Link>
+      {" | "}
       <Link to="/subscriptions">← Back to subscriptions</Link>
     </div>
   );
