@@ -5,3 +5,4 @@ resources:
   - configmap.yaml
   - postgres.yaml
   - redis.yaml
+  - migrate-job.yaml

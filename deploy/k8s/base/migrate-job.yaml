@@ -1,0 +1,70 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: hookrail
+  labels:
+    app: migrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - until pg_isready -h postgres; do sleep 1; done
+      containers:
+        - name: migrate
+          image: hookrail
+          command: ["hookrail-ctl", "migrate"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-db
+                  key: migrator_dsn
+            - name: REDIS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: hookrail-config
+                  key: REDIS_ADDR
+            - name: HOOKRAIL_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-app
+                  key: master_key
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wait-for-migrate
+  namespace: hookrail
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wait-for-migrate
+  namespace: hookrail
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wait-for-migrate
+  namespace: hookrail
+subjects:
+  - kind: ServiceAccount
+    name: wait-for-migrate
+    namespace: hookrail
+roleRef:
+  kind: Role
+  name: wait-for-migrate
+  apiGroup: rbac.authorization.k8s.io
