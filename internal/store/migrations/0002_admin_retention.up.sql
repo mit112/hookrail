@@ -1,5 +1,5 @@
--- Slice A admin + retention. Plain CREATE INDEX; Slice E adds CONCURRENTLY +
--- lock_timeout (design D-A5/F8). ALTER TYPE ADD VALUE is safe here: the value
+-- Slice A admin + retention. Plain CREATE INDEX; see 0005 for the CONCURRENTLY
+-- convention. ALTER TYPE ADD VALUE is safe here: the value
 -- is only used at runtime, never inside this migration's transaction.
 ALTER TYPE delivery_state ADD VALUE IF NOT EXISTS 'cancelled';
 ALTER TABLE endpoints     ADD COLUMN deleted_at TIMESTAMPTZ;
