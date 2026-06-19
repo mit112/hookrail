@@ -55,6 +55,15 @@ spec:
         - podSelector:
             matchLabels:
               app: dashboard
+        - podSelector:
+            matchLabels:
+              app: dashboard-keygen
+        - podSelector:
+            matchLabels:
+              app: migrate
+        - podSelector:
+            matchLabels:
+              app: db-bootstrap
       ports:
         - port: 5432
 ---
@@ -119,3 +128,82 @@ spec:
               app: dashboard
       ports:
         - port: 4318
+---
+# otel-collector exports traces to jaeger:4317 (OTLP gRPC) — without this the
+# collector cannot flush spans and errors/crashloops behind the default-deny.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-otel-to-jaeger
+  namespace: hookrail
+spec:
+  podSelector:
+    matchLabels:
+      app: jaeger
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: otel-collector
+      ports:
+        - port: 4317
+---
+# prometheus scrapes app /metrics — default-deny otherwise blocks every scrape.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-to-api
+  namespace: hookrail
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-to-worker
+  namespace: hookrail
+spec:
+  podSelector:
+    matchLabels:
+      app: worker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-to-scheduler
+  namespace: hookrail
+spec:
+  podSelector:
+    matchLabels:
+      app: scheduler
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 8083

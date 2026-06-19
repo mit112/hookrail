@@ -9,6 +9,9 @@ metadata:
 spec:
   backoffLimit: 3
   template:
+    metadata:
+      labels:
+        app: migrate
     spec:
       restartPolicy: Never
       initContainers:
