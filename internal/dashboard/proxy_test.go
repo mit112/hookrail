@@ -30,7 +30,7 @@ func TestProxyInjectsTokenStripsSmuggled(t *testing.T) {
 	srv.Handler().ServeHTTP(w, r)
 
 	if w.Code != 200 { t.Fatalf("want 200, got %d", w.Code) }
-	if sawAuth != "Bearer admintok" { t.Errorf("upstream Authorization = %q, want injected admin token", sawAuth) }
+	if sawAuth != "Bearer dev-admin-token-001" { t.Errorf("upstream Authorization = %q, want injected admin token", sawAuth) }
 	if sawCookie != "" { t.Errorf("cookie leaked upstream: %q", sawCookie) }
 	if sawProxyAuth != "" { t.Errorf("proxy-authorization leaked upstream: %q", sawProxyAuth) }
 }

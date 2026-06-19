@@ -90,7 +90,7 @@ services:
     command: ["hookrail-admin"]
     environment:
       <<: *hookrail-env
-      HOOKRAIL_ADMIN_TOKEN: "dev-admin-token"   # dev only; real deploys inject a secret (Slice E)
+      HOOKRAIL_ADMIN_TOKEN: "dev-admin-token-001"   # dev only; real deploys inject a secret (Slice E)
     ports: ["8082:8082"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -133,7 +133,7 @@ services:
       target: dashboard
     command: ["hookrail-dashboard"]
     environment:
-      HOOKRAIL_ADMIN_TOKEN: dev-admin-token
+      HOOKRAIL_ADMIN_TOKEN: dev-admin-token-001
       HOOKRAIL_ADMIN_URL: http://admin:8082
       HOOKRAIL_INGRESS_URL: http://api:8080
       HOOKRAIL_DASHBOARD_PASSWORD: dev-dashboard-pw

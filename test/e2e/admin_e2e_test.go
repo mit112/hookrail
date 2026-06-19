@@ -13,7 +13,7 @@ import (
 
 var (
 	adminURL   = env("E2E_ADMIN_URL", "http://localhost:8082")
-	adminToken = env("E2E_ADMIN_TOKEN", "dev-admin-token")
+	adminToken = env("E2E_ADMIN_TOKEN", "dev-admin-token-001")
 )
 
 func adminReq(t *testing.T, method, path string, body any) (*http.Response, []byte) {

@@ -32,6 +32,10 @@ func main() {
 		slog.Error("HOOKRAIL_ADMIN_TOKEN is required; refusing to boot an unauthenticated admin surface")
 		os.Exit(1)
 	}
+	if len(cfg.AdminToken) < 16 {
+		slog.Error("HOOKRAIL_ADMIN_TOKEN must be >= 16 chars")
+		os.Exit(1)
+	}
 	shutdown, err := obs.InitTracing(ctx, "hookrail-admin")
 	if err != nil {
 		slog.Error("tracing", "err", err)

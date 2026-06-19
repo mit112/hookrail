@@ -33,6 +33,9 @@ func LoadConfig() (Config, error) {
 	}
 	var err error
 	if c.Password, err = req("HOOKRAIL_DASHBOARD_PASSWORD"); err != nil { return c, err }
+	if len(c.Password) < 16 {
+		return Config{}, fmt.Errorf("HOOKRAIL_DASHBOARD_PASSWORD must be >= 16 chars")
+	}
 	sk := os.Getenv("HOOKRAIL_DASHBOARD_SESSION_KEY")
 	if len(sk) < 32 { return c, errors.New("HOOKRAIL_DASHBOARD_SESSION_KEY must be >= 32 bytes") }
 	c.SessionKey = []byte(sk)
