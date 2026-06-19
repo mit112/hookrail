@@ -1,0 +1,22 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/mit112/hookrail/internal/signing"
+)
+
+func main() {
+	secret := []byte("whsec_test_secret")
+	body := []byte(`{"order_id":"o_1","amount":42}`)
+	did := "01JXAMPLEDELIVERYID0000000"
+	t := time.Unix(1781092800, 0).UTC()
+	h := signing.Sign(secret, t, did, body)
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]string{
+		"secret": string(secret), "delivery_id": did, "body": string(body),
+		"header": h, "unix": fmt.Sprint(t.Unix()),
+	})
+}

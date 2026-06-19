@@ -28,6 +28,7 @@ from hookrail.models import (
     EventStatus,
     Problem,
 )
+from hookrail.signing import verify_signature
 
 __all__ = [
     "Hookrail",
@@ -53,4 +54,5 @@ __all__ = [
     "RateLimitError",
     "ServerError",
     "RetryError",
+    "verify_signature",
 ]
