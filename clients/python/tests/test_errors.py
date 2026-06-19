@@ -1,5 +1,3 @@
-import pytest
-
 from hookrail.errors import (
     AuthenticationError,
     HookrailAPIError,

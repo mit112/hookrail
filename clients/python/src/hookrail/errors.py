@@ -59,7 +59,9 @@ class PayloadTooLargeError(HookrailAPIError):
 class RateLimitError(HookrailAPIError):
     """429 — too many requests."""
 
-    def __init__(self, status: int, problem: Problem | None, retry_after: float | None = None) -> None:
+    def __init__(
+        self, status: int, problem: Problem | None, retry_after: float | None = None
+    ) -> None:
         self.retry_after = retry_after
         super().__init__(status, problem)
 
