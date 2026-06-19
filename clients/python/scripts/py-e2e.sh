@@ -2,7 +2,8 @@
 # Bring up the compose stack, seed a producer key, run the Python SDK e2e, tear down.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."   # repo root
-COMPOSE="docker compose -f deploy/compose/docker-compose.yml"
+ROOT="$(pwd)"
+COMPOSE="docker compose -f $ROOT/deploy/compose/docker-compose.yml"
 export HOOKRAIL_MASTER_KEY="${HOOKRAIL_MASTER_KEY:-000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f}"
 
 $COMPOSE up -d --build
@@ -15,4 +16,4 @@ KEY="$($COMPOSE run --rm api hookrail-ctl seed -url http://test-receiver:9090/su
        | awk -F= '/^producer_key=/{print $2}')"
 export HOOKRAIL_API_KEY="$KEY"
 export HOOKRAIL_BASE_URL="http://localhost:8080"
-cd clients/python && uv run pytest -q -m e2e
+cd "$ROOT/clients/python" && uv run pytest -q -m e2e
