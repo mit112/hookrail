@@ -171,3 +171,78 @@ These are documented residual risks (design §9); do not treat them as bugs.
   attempted (the worker's claim query excludes soft-deleted targets, but the
   delivery record was already created). Late attempts within a single ingest
   batch are possible, though the overall system converges to correct exclusion.
+
+## Dashboard (P1 Slice C)
+
+A browser-based admin dashboard (React/TypeScript SPA) served by a Go
+backends-for-frontends (BFF) that holds the admin token server-side so it never
+reaches the browser. The BFF authenticates humans with a shared password,
+issues an HMAC-signed cookie, then proxies an allowlist of admin routes and one
+native test-event route.
+
+### Quickstart
+
+```bash
+make web-build
+docker compose -f deploy/compose/docker-compose.yml up -d --build dashboard
+# Open http://localhost:8085, log in with password from dev config
+```
+
+Or in one command (builds the SPA, starts the full stack, and opens the
+dashboard):
+
+```bash
+make web-build && docker compose -f deploy/compose/docker-compose.yml up -d --build dashboard && echo "http://localhost:8085"
+```
+
+### Environment variables
+
+| Env | Default | Description |
+|-----|---------|-------------|
+| `HOOKRAIL_DASHBOARD_PASSWORD` | — | Shared password for human login (required) |
+| `HOOKRAIL_DASHBOARD_SESSION_KEY` | — | HMAC signing key, 32 hex-encoded bytes (required) |
+| `HOOKRAIL_DASHBOARD_SESSION_KEY_PREV` | — | Previous signing key for zero-downtime rotation |
+| `HOOKRAIL_ADMIN_TOKEN` | — | Admin API bearer token for proxied admin calls (required) |
+| `HOOKRAIL_PRODUCER_KEY_FILE` | — | Path to file containing the producer key (plaintext, written by the compose provisioner) |
+| `HOOKRAIL_ADMIN_URL` | `http://admin:8082` | Internal admin API base URL |
+| `HOOKRAIL_INGRESS_URL` | `http://api:8080` | Internal ingress API base URL |
+| `HOOKRAIL_DASHBOARD_ADDR` | `:8085` | Listen address |
+| `HOOKRAIL_DASHBOARD_SESSION_TTL` | `24h` | Session cookie TTL (Go duration) |
+| `HOOKRAIL_DASHBOARD_INSECURE_COOKIE` | `false` | Allow cookies over plain HTTP (dev only) |
+
+### Limits & honesty
+
+These are documented residual risks (design §8); do not treat them as bugs.
+
+- **Single shared password, no RBAC.** All dashboard users share one password.
+  There is no role-based access control — every authenticated user has full
+  read/write access to all admin operations. Multi-user auth and scoped
+  permissions are deferred to a future slice.
+
+- **Stateless cookie, no revocation.** The session cookie is a self-contained
+  HMAC-signed token with a TTL. There is no server-side session store, so a
+  compromised cookie cannot be revoked before its TTL expires. Logout clears
+  the cookie client-side but the token remains valid until it expires.
+
+- **`next_cursor` is forgeable.** Keyset pagination cursors are unsigned. A
+  user can tamper with `next_cursor` to probe arbitrary ULID ranges. This
+  reveals only the same data the user can already see through the UI (no
+  privilege escalation), but it means cursor integrity is not guaranteed.
+
+- **TLS / public exposure is Slice E.** The dashboard is designed for local or
+  VPN-only deployment behind a TLS-terminating reverse proxy. It does not
+  terminate TLS itself, and `HOOKRAIL_DASHBOARD_INSECURE_COOKIE` is `true` in
+  dev. Production TLS, certificate management, and WAF integration are out of
+  scope for this slice.
+
+- **Admin-token blast radius.** The BFF holds the full `HOOKRAIL_ADMIN_TOKEN`
+  in process memory. A compromise of the BFF process leaks full admin API
+  access to the underlying admin surface. Defense-in-depth (network policy,
+  read-only proxy routes) limits but does not eliminate this risk.
+
+- **Test-event key exposure.** The test-event feature injects a provisioned
+  producer key into the BFF's upstream calls. This key can create events on the
+  ingress. It is scoped per the provisioner's `create-producer-key` naming and
+  can be rotated independently, but a BFF compromise leaks the ability to
+  produce test events.
+
