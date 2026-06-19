@@ -9,12 +9,15 @@ metadata:
 spec:
   backoffLimit: 3
   template:
+    metadata:
+      labels:
+        app: dashboard-keygen
     spec:
       restartPolicy: Never
       serviceAccountName: wait-for-migrate
       initContainers:
         - name: wait-migrate
-          image: bitnami/kubectl:1.33
+          image: rancher/kubectl:v1.33.1
           command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
       containers:
         - name: keygen

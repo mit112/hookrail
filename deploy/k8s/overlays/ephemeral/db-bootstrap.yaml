@@ -1,0 +1,54 @@
+---
+# Ephemeral-only bootstrap Job: sets hookrail_app password post-migration
+# The 0004 migration creates hookrail_app NOLOGIN; this Job runs ALTER ROLE
+# to enable LOGIN with the password from the dev-secret.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-bootstrap
+  namespace: hookrail
+  labels:
+    app: db-bootstrap
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: db-bootstrap
+    spec:
+      restartPolicy: Never
+      serviceAccountName: wait-for-migrate
+      initContainers:
+        - name: wait-migrate
+          image: rancher/kubectl:v1.33.1
+          command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
+      containers:
+        - name: bootstrap
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              # Retry the idempotent ALTER ROLE until postgres accepts the
+              # connection: migrate completing does not guarantee the server is
+              # already accepting TCP (initdb restart window / netpol propagation),
+              # which previously surfaced as a one-shot "connection refused".
+              for i in $(seq 1 60); do
+                if psql "$MIGRATOR_DSN" -v ON_ERROR_STOP=1 -v app_pw="$APP_PW" \
+                     -c "ALTER ROLE hookrail_app LOGIN PASSWORD :'app_pw';"; then
+                  echo "hookrail_app password set"; exit 0
+                fi
+                echo "postgres not ready, retry $i/60"; sleep 2
+              done
+              echo "db-bootstrap: postgres never became reachable"; exit 1
+          env:
+            - name: MIGRATOR_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-db
+                  key: migrator_dsn
+            - name: APP_PW
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-db
+                  key: app_pw

@@ -4,7 +4,9 @@ resources:
   - ../../base
   - dev-secret.yaml
   - test-receiver.yaml
+  - test-receiver-netpol.yaml
   - keygen-job.yaml
+  - db-bootstrap.yaml
 images:
   - name: hookrail
     newName: hookrail
@@ -80,18 +82,10 @@ patches:
       - op: add
         path: /spec/template/spec/initContainers/1/imagePullPolicy
         value: Never
-  - target:
-      kind: StatefulSet
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: Never
+
   - target:
       kind: Job
     patch: |-
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
-        value: Never
-      - op: add
-        path: /spec/template/spec/initContainers/0/imagePullPolicy
         value: Never
