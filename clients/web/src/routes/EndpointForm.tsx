@@ -4,6 +4,7 @@ import { useCreateEndpoint, useUpdateEndpoint, useDeleteEndpoint } from "../quer
 import { useEndpoint } from "../query/endpoints";
 import { ApiProblem } from "../api/client";
 import type { TEndpointRow } from "../api/schemas";
+import { SecretReveal } from "../components/SecretReveal";
 
 interface EndpointFormProps {
   endpoint?: TEndpointRow;
@@ -125,8 +126,17 @@ export function EndpointForm({ endpoint, onSecret, onSuccess }: EndpointFormProp
 
 export function EndpointNew() {
   const navigate = useNavigate();
+  const [secret, setSecret] = useState<string | null>(null);
   return (
-    <EndpointForm onSecret={() => {}} onSuccess={() => navigate("/endpoints")} />
+    <>
+      <EndpointForm
+        onSecret={(s) => setSecret(s)}
+        onSuccess={() => { if (!secret) navigate("/endpoints"); }}
+      />
+      {secret && (
+        <SecretReveal secret={secret} onClose={() => { setSecret(null); navigate("/endpoints"); }} />
+      )}
+    </>
   );
 }
 

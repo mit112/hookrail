@@ -15,6 +15,5 @@ export default defineConfig({
     setupFiles: ["./vitest.setup.ts"],
     globals: false,
     exclude: ["node_modules", "dist-ts"],
-    pool: "forks",
   },
 });
