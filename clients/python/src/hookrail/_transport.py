@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 
@@ -59,3 +60,16 @@ def parse_retry_after(value: str | None, now: float) -> float | None:
     if when is None:
         return None
     return max(0.0, when.timestamp() - now)
+
+
+def compute_delay(
+    attempt: int, policy: RetryPolicy, retry_after: float | None, rng: random.Random
+) -> float:
+    """Full-jitter exponential backoff, capped. Retry-After is a floor, never shortened.
+    The deadline clip lives in RetryController (this returns the raw desired delay)."""
+    exp = min(attempt, 30)  # bound the exponent -> no OverflowError
+    backoff = min(policy.cap, policy.base * (2**exp))
+    delay = rng.uniform(0.0, backoff)
+    if retry_after is not None and policy.respect_retry_after:
+        delay = retry_after + rng.uniform(0.0, policy.base)  # honor server, add jitter on top
+    return max(0.0, delay)

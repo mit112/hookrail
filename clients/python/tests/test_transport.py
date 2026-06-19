@@ -1,10 +1,11 @@
 import math
+import random
 from datetime import datetime, timezone
 from email.utils import format_datetime
 
 import pytest
 
-from hookrail._transport import RetryPolicy, is_retryable, parse_retry_after
+from hookrail._transport import RetryPolicy, compute_delay, is_retryable, parse_retry_after
 from hookrail.errors import HookrailConfigError
 
 
@@ -72,3 +73,23 @@ def test_retry_after_past_date_clamps_to_zero() -> None:
     past = datetime(2000, 1, 1, tzinfo=timezone.utc)
     now = datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp()
     assert parse_retry_after(format_datetime(past, usegmt=True), now=now) == 0.0
+
+
+def test_full_jitter_within_capped_backoff() -> None:
+    p = RetryPolicy(base=0.2, cap=10.0)
+    rng = random.Random(0)
+    for attempt in range(0, 6):
+        d = compute_delay(attempt, p, retry_after=None, rng=rng)
+        assert 0.0 <= d <= 10.0
+
+
+def test_huge_attempt_does_not_overflow() -> None:
+    p = RetryPolicy()
+    d = compute_delay(100000, p, retry_after=None, rng=random.Random(1))
+    assert math.isfinite(d) and 0.0 <= d <= p.cap
+
+
+def test_retry_after_is_a_floor_not_shortened() -> None:
+    p = RetryPolicy(base=0.2, cap=10.0)
+    d = compute_delay(0, p, retry_after=5.0, rng=random.Random(2))
+    assert d >= 5.0
