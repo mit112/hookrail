@@ -4,6 +4,7 @@ resources:
   - ../../base
   - dev-secret.yaml
   - test-receiver.yaml
+  - keygen-job.yaml
 images:
   - name: hookrail
     newName: hookrail
@@ -41,6 +42,22 @@ patches:
       - op: add
         path: /spec/template/spec/initContainers/0/imagePullPolicy
         value: Never
+  # dashboard: add second initContainer that waits for producer-key Secret to be populated
+  - target:
+      kind: Deployment
+      name: dashboard
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/1
+        value:
+          name: wait-producer-key
+          image: busybox:1.36
+          imagePullPolicy: Never
+          command: ["sh", "-c", "until [ -s /run/secrets/producer_key ]; do sleep 2; done"]
+          volumeMounts:
+            - name: producer-key
+              mountPath: /run/secrets
+              readOnly: true
   # worker has 2 initContainers (wait-migrate + wait-redis)
   - target:
       kind: Deployment

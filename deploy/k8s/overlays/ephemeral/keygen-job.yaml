@@ -1,0 +1,38 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dashboard-keygen
+  namespace: hookrail
+  labels:
+    app: dashboard-keygen
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: wait-for-migrate
+      initContainers:
+        - name: wait-migrate
+          image: bitnami/kubectl:1.33
+          command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
+      containers:
+        - name: keygen
+          image: hookrail
+          command: ["hookrail-ctl", "create-producer-key", "-name", "dashboard"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-db
+                  key: migrator_dsn
+            - name: REDIS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: hookrail-config
+                  key: REDIS_ADDR
+            - name: HOOKRAIL_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-app
+                  key: master_key
