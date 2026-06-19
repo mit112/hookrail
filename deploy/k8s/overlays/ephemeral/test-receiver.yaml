@@ -1,0 +1,39 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-receiver
+  namespace: hookrail
+  labels:
+    app: test-receiver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-receiver
+  template:
+    metadata:
+      labels:
+        app: test-receiver
+    spec:
+      containers:
+        - name: test-receiver
+          image: hookrail
+          command: ["test-receiver"]
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-receiver
+  namespace: hookrail
+  labels:
+    app: test-receiver
+spec:
+  selector:
+    app: test-receiver
+  ports:
+    - port: 9090
+      targetPort: 9090

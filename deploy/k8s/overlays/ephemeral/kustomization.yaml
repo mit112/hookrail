@@ -1,0 +1,80 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - dev-secret.yaml
+  - test-receiver.yaml
+images:
+  - name: hookrail
+    newName: hookrail
+    newTag: e2e
+  - name: hookrail-dashboard
+    newName: hookrail-dashboard
+    newTag: e2e
+patches:
+  # containers/0/imagePullPolicy applies to every Deployment (incl. test-receiver)
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+  # initContainers/0 — api, admin, dashboard each have exactly 1 initContainer
+  - target:
+      kind: Deployment
+      name: api
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/imagePullPolicy
+        value: Never
+  - target:
+      kind: Deployment
+      name: admin
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/imagePullPolicy
+        value: Never
+  - target:
+      kind: Deployment
+      name: dashboard
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/imagePullPolicy
+        value: Never
+  # worker has 2 initContainers (wait-migrate + wait-redis)
+  - target:
+      kind: Deployment
+      name: worker
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/imagePullPolicy
+        value: Never
+      - op: add
+        path: /spec/template/spec/initContainers/1/imagePullPolicy
+        value: Never
+  # scheduler has 2 initContainers (wait-migrate + wait-redis)
+  - target:
+      kind: Deployment
+      name: scheduler
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/imagePullPolicy
+        value: Never
+      - op: add
+        path: /spec/template/spec/initContainers/1/imagePullPolicy
+        value: Never
+  - target:
+      kind: StatefulSet
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+  - target:
+      kind: Job
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+      - op: add
+        path: /spec/template/spec/initContainers/0/imagePullPolicy
+        value: Never
