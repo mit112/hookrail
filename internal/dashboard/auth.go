@@ -37,6 +37,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.requireSession(s.handleLogout))
 	mux.HandleFunc("GET /api/session", s.requireSession(s.handleSession))
+	mux.HandleFunc("POST /api/test-event", s.requireSession(s.handleTestEvent))
 	// Admin proxy allowlist (Task 7 — Task 9 finalizes with ops + static)
 	for _, rt := range s.adminRoutes() {
 		mux.HandleFunc(rt.method+" "+rt.path, s.requireSession(s.proxyAdmin))
