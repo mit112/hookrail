@@ -10,3 +10,7 @@ reasonix.toml
 clients/python/dist/
 clients/python/.venv/
 clients/python/**/__pycache__/
+
+clients/web/node_modules/
+internal/dashboard/dist/*
+!internal/dashboard/dist/index.html

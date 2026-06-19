@@ -9,6 +9,9 @@ linters:
     - ineffassign
     - misspell
     - gosec
+  exclusions:
+    paths:
+      - clients/web
 run:
   build-tags:
     - integration
