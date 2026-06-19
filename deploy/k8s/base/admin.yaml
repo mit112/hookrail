@@ -1,0 +1,80 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: hookrail
+  labels:
+    app: admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: admin
+  template:
+    metadata:
+      labels:
+        app: admin
+    spec:
+      serviceAccountName: wait-for-migrate
+      initContainers:
+        - name: wait-migrate
+          image: bitnami/kubectl:1.33
+          command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
+      containers:
+        - name: admin
+          image: hookrail
+          command: ["hookrail-admin"]
+          ports:
+            - containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: hookrail-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-db
+                  key: app_dsn
+            - name: HOOKRAIL_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-app
+                  key: master_key
+            - name: HOOKRAIL_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-admin
+                  key: token
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8082
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8082
+            initialDelaySeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: hookrail
+  labels:
+    app: admin
+spec:
+  selector:
+    app: admin
+  ports:
+    - port: 8082
+      targetPort: 8082

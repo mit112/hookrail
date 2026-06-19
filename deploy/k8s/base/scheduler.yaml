@@ -1,0 +1,78 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  namespace: hookrail
+  labels:
+    app: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+    spec:
+      serviceAccountName: wait-for-migrate
+      initContainers:
+        - name: wait-migrate
+          image: bitnami/kubectl:1.33
+          command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
+        - name: wait-redis
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z redis 6379; do sleep 1; done"]
+      containers:
+        - name: scheduler
+          image: hookrail
+          command: ["hookrail-scheduler"]
+          ports:
+            - containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: hookrail-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-db
+                  key: app_dsn
+            - name: HOOKRAIL_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-app
+                  key: master_key
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 8083
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 8083
+            initialDelaySeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler
+  namespace: hookrail
+  labels:
+    app: scheduler
+spec:
+  selector:
+    app: scheduler
+  ports:
+    - port: 8083
+      targetPort: 8083

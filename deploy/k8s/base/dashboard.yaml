@@ -1,0 +1,97 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: hookrail
+  labels:
+    app: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      serviceAccountName: wait-for-migrate
+      initContainers:
+        - name: wait-migrate
+          image: bitnami/kubectl:1.33
+          command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
+      containers:
+        - name: dashboard
+          image: hookrail-dashboard
+          command: ["hookrail-dashboard"]
+          ports:
+            - containerPort: 8085
+          env:
+            - name: HOOKRAIL_ADMIN_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: hookrail-config
+                  key: HOOKRAIL_ADMIN_URL
+            - name: HOOKRAIL_INGRESS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: hookrail-config
+                  key: HOOKRAIL_INGRESS_URL
+            - name: HOOKRAIL_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-admin
+                  key: token
+            - name: HOOKRAIL_DASHBOARD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-dashboard
+                  key: password
+            - name: HOOKRAIL_DASHBOARD_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-dashboard
+                  key: session_key
+            - name: HOOKRAIL_PRODUCER_KEY_FILE
+              value: "/run/secrets/producer_key"
+          volumeMounts:
+            - name: producer-key
+              mountPath: /run/secrets
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8085
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8085
+            initialDelaySeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: producer-key
+          secret:
+            secretName: hookrail-dashboard-producer-key
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: hookrail
+  labels:
+    app: dashboard
+spec:
+  selector:
+    app: dashboard
+  ports:
+    - port: 8085
+      targetPort: 8085

@@ -1,0 +1,64 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: hookrail
+  labels:
+    app: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      serviceAccountName: wait-for-migrate
+      initContainers:
+        - name: wait-migrate
+          image: bitnami/kubectl:1.33
+          command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
+        - name: wait-redis
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z redis 6379; do sleep 1; done"]
+      containers:
+        - name: worker
+          image: hookrail
+          command: ["hookrail-worker"]
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: hookrail-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-db
+                  key: app_dsn
+            - name: HOOKRAIL_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hookrail-app
+                  key: master_key
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 8081
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 8081
+            initialDelaySeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      terminationGracePeriodSeconds: 30

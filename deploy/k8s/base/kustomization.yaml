@@ -6,3 +6,8 @@ resources:
   - postgres.yaml
   - redis.yaml
   - migrate-job.yaml
+  - api.yaml
+  - worker.yaml
+  - scheduler.yaml
+  - admin.yaml
+  - dashboard.yaml
