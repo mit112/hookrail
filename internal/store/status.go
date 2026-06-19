@@ -74,6 +74,10 @@ func (s *Store) GetEventStatus(ctx context.Context, eventID string) (EventStatus
 			}
 			st.Deliveries[i].Attempts = append(st.Deliveries[i].Attempts, a)
 		}
+		if err := arows.Err(); err != nil { // mirror the deliveries loop: a cursor error must not return a partial 200
+			arows.Close()
+			return st, err
+		}
 		arows.Close()
 	}
 	return st, nil
