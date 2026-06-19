@@ -1,0 +1,67 @@
+package dashboard
+
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+)
+
+type Config struct {
+	Password       string
+	SessionKey     []byte
+	SessionPrev    []byte // optional; nil when unset
+	AdminToken     string
+	ProducerKey    string
+	AdminURL       string
+	IngressURL     string
+	Addr           string
+	SessionTTL     time.Duration
+	InsecureCookie bool
+}
+
+func LoadConfig() (Config, error) {
+	var c Config
+	req := func(k string) (string, error) {
+		v := os.Getenv(k)
+		if strings.TrimSpace(v) == "" {
+			return "", fmt.Errorf("required env %s is unset", k)
+		}
+		return v, nil
+	}
+	var err error
+	if c.Password, err = req("HOOKRAIL_DASHBOARD_PASSWORD"); err != nil { return c, err }
+	sk := os.Getenv("HOOKRAIL_DASHBOARD_SESSION_KEY")
+	if len(sk) < 32 { return c, errors.New("HOOKRAIL_DASHBOARD_SESSION_KEY must be >= 32 bytes") }
+	c.SessionKey = []byte(sk)
+	if p := os.Getenv("HOOKRAIL_DASHBOARD_SESSION_KEY_PREVIOUS"); p != "" {
+		if len(p) < 32 { return c, errors.New("HOOKRAIL_DASHBOARD_SESSION_KEY_PREVIOUS must be >= 32 bytes") }
+		c.SessionPrev = []byte(p)
+	}
+	if c.AdminToken, err = req("HOOKRAIL_ADMIN_TOKEN"); err != nil { return c, err }
+	keyFile, err := req("HOOKRAIL_PRODUCER_KEY_FILE")
+	if err != nil { return c, err }
+	// Path from env var, by design.
+	b, err := os.ReadFile(keyFile) //nolint:gosec
+	if err != nil { return c, fmt.Errorf("reading HOOKRAIL_PRODUCER_KEY_FILE: %w", err) }
+	c.ProducerKey = strings.TrimSpace(string(b))
+	if !strings.HasPrefix(c.ProducerKey, "hk_") { return c, errors.New("producer key file must contain an hk_ key") }
+	if c.AdminURL, err = req("HOOKRAIL_ADMIN_URL"); err != nil { return c, err }
+	if c.IngressURL, err = req("HOOKRAIL_INGRESS_URL"); err != nil { return c, err }
+	for _, u := range []string{c.AdminURL, c.IngressURL} {
+		pu, perr := url.Parse(u)
+		if perr != nil || (pu.Scheme != "http" && pu.Scheme != "https") {
+			return c, fmt.Errorf("invalid upstream URL %q", u)
+		}
+	}
+	c.Addr = os.Getenv("HOOKRAIL_DASHBOARD_ADDR")
+	if c.Addr == "" { c.Addr = ":8085" }
+	c.SessionTTL = 12 * time.Hour
+	if v := os.Getenv("HOOKRAIL_DASHBOARD_SESSION_TTL"); v != "" {
+		if d, derr := time.ParseDuration(v); derr == nil { c.SessionTTL = d } else { return c, fmt.Errorf("bad HOOKRAIL_DASHBOARD_SESSION_TTL: %w", derr) }
+	}
+	c.InsecureCookie = os.Getenv("HOOKRAIL_DASHBOARD_INSECURE_COOKIE") == "true"
+	return c, nil
+}
