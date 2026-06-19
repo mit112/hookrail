@@ -11,3 +11,7 @@ resources:
   - scheduler.yaml
   - admin.yaml
   - dashboard.yaml
+  - prometheus.yaml
+  - otel-collector.yaml
+  - jaeger.yaml
+  - networkpolicy.yaml
