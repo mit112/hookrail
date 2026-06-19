@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -41,6 +42,7 @@ func clientIP(r *http.Request) string {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if r.Header.Get("Content-Type") != "application/json" {
 		httpx.Problem(w, http.StatusUnsupportedMediaType, "bad content-type", "application/json required")
 		return
@@ -53,6 +55,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpx.Problem(w, http.StatusRequestEntityTooLarge, "request too large", "request body exceeds 64 KiB")
+			return
+		}
 		httpx.Problem(w, http.StatusBadRequest, "invalid body", `expected {"password": string}`)
 		return
 	}

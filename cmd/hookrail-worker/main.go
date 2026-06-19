@@ -75,7 +75,14 @@ func main() {
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.Handler())
-		_ = (&http.Server{Addr: ":8081", Handler: mux, ReadHeaderTimeout: 5 * time.Second}).ListenAndServe()
+		_ = (&http.Server{
+			Addr:              ":8081",
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}).ListenAndServe()
 	}()
 	const poolSize = 8 // goroutine pool (§3.4)
 	var wg sync.WaitGroup

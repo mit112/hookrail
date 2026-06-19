@@ -58,7 +58,14 @@ func main() {
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.Handler())
-		_ = (&http.Server{Addr: ":8083", Handler: mux, ReadHeaderTimeout: 5 * time.Second}).ListenAndServe()
+		_ = (&http.Server{
+			Addr:              ":8083",
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}).ListenAndServe()
 	}()
 
 	sw := &scheduler.Sweeper{Source: s, Publisher: q, Interval: 30 * time.Second, BatchSize: 1000}

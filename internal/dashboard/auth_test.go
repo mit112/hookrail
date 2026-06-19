@@ -68,3 +68,17 @@ func TestThrottleLocksOut(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginOversizedBody_Returns413(t *testing.T) {
+	srv := testServer(t)
+	// Build valid JSON body just over 64 KiB — the only reason to reject is size
+	password := strings.Repeat("a", 64*1024-13) // 65523 a's = 65537 total body len
+	body := `{"password":"` + password + `"}`
+	r := httptest.NewRequest("POST", "/api/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d", w.Code)
+	}
+}
