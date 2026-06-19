@@ -9,10 +9,11 @@ import { SecretReveal } from "../components/SecretReveal";
 interface EndpointFormProps {
   endpoint?: TEndpointRow;
   onSecret?: (secret: string) => void;
+  onSecretReset?: (reset: () => void) => void;
   onSuccess?: () => void;
 }
 
-export function EndpointForm({ endpoint, onSecret, onSuccess }: EndpointFormProps) {
+export function EndpointForm({ endpoint, onSecret, onSecretReset, onSuccess }: EndpointFormProps) {
   const isEdit = !!endpoint;
   const [url, setUrl] = useState(endpoint?.url ?? "");
   const [description, setDescription] = useState(endpoint?.description ?? "");
@@ -45,6 +46,9 @@ export function EndpointForm({ endpoint, onSecret, onSuccess }: EndpointFormProp
         const result = await createMutation.mutateAsync({ url: url.trim(), description: description.trim() || undefined });
         if (onSecret && result.secret) {
           onSecret(result.secret);
+          if (onSecretReset) {
+            onSecretReset(() => createMutation.reset());
+          }
         }
       }
     } catch (err) {
@@ -127,14 +131,23 @@ export function EndpointForm({ endpoint, onSecret, onSuccess }: EndpointFormProp
 export function EndpointNew() {
   const navigate = useNavigate();
   const [secret, setSecret] = useState<string | null>(null);
+  const [resetSecretMutation, setResetSecretMutation] = useState<(() => void) | null>(null);
   return (
     <>
       <EndpointForm
         onSecret={(s) => setSecret(s)}
+        onSecretReset={(reset) => setResetSecretMutation(() => reset)}
         onSuccess={() => { if (!secret) navigate("/endpoints"); }}
       />
       {secret && (
-        <SecretReveal secret={secret} onClose={() => { setSecret(null); navigate("/endpoints"); }} />
+        <SecretReveal
+          secret={secret}
+          onClose={() => {
+            setSecret(null);
+            resetSecretMutation?.();
+            navigate("/endpoints");
+          }}
+        />
       )}
     </>
   );

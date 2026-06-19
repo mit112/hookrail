@@ -50,7 +50,7 @@ export function EndpointDetail() {
       {" | "}
       <Link to="/endpoints">← Back to endpoints</Link>
       {rotateError && <p role="alert">{rotateError}</p>}
-      {secret && <SecretReveal secret={secret} onClose={() => setSecret(null)} />}
+      {secret && <SecretReveal secret={secret} onClose={() => { setSecret(null); rotateMutation.reset(); }} />}
     </div>
   );
 }

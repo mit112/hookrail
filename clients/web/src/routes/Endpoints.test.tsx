@@ -1,4 +1,4 @@
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -119,5 +119,45 @@ describe("EndpointDetail", () => {
     await screen.findByText("Endpoint e1");
     expect(screen.getByText("https://a.example")).toBeInTheDocument();
     expect(screen.getByText("desc")).toBeInTheDocument();
+  });
+
+  it("clears the secret from the DOM when the rotate reveal modal is closed", async () => {
+    server.use(
+      http.get("/v1/endpoints/e1", () =>
+        HttpResponse.json({
+          id: "e1",
+          url: "https://a.example",
+          description: "desc",
+          created_at: "2025-01-01T00:00:00Z",
+        }),
+      ),
+      http.post("/v1/endpoints/e1/rotate-secret", () =>
+        HttpResponse.json({ secret: "whsec_rotated" }, { status: 200 }),
+      ),
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <MemoryRouter initialEntries={["/endpoints/e1"]}>
+        <QueryClientProvider client={qc}>
+          <Routes>
+            <Route path="/endpoints/:id" element={<EndpointDetail />} />
+          </Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText("Endpoint e1");
+
+    // Click rotate secret
+    fireEvent.click(screen.getByRole("button", { name: /rotate secret/i }));
+
+    // Secret should appear in the reveal modal
+    await screen.findByText("whsec_rotated");
+    expect(screen.getByText(/will not be shown again/i)).toBeInTheDocument();
+
+    // Click "I saved it" to close
+    fireEvent.click(screen.getByRole("button", { name: /i saved it/i }));
+
+    // Secret should be gone from DOM — the mutation result was cleared
+    await waitFor(() => expect(screen.queryByText("whsec_rotated")).not.toBeInTheDocument());
   });
 });
