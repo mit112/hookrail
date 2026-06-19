@@ -92,3 +92,31 @@ def test_get_event_parses_status() -> None:
     with Hookrail(api_key="hk_x", base_url="http://t:8080") as c:
         st = c.get_event("ev1")
     assert st.deliveries[0].state is DeliveryState.succeeded
+
+
+@respx.mock
+def test_injected_client_not_closed_by_close() -> None:
+    respx.post("http://t:8080/v1/events").mock(
+        return_value=httpx.Response(202, json={"event_id": "e", "delivery_ids": []})
+    )
+    external = httpx.Client()
+    c = Hookrail(api_key="hk_x", base_url="http://t:8080", http_client=external)
+    c.send_event("orders.created", {"id": 1})
+    c.close()
+    assert not external.is_closed  # SDK must not close a client it does not own
+    external.close()
+
+
+def test_public_exports_present() -> None:
+    import hookrail
+
+    for name in [
+        "Hookrail",
+        "AsyncHookrail",
+        "EventAccepted",
+        "EventStatus",
+        "HookrailError",
+        "RateLimitError",
+        "__version__",
+    ]:
+        assert hasattr(hookrail, name)
