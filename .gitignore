@@ -15,5 +15,16 @@ clients/web/node_modules/
 clients/web/dist/
 clients/web/dist-ts/
 clients/web/tsconfig.tsbuildinfo
+clients/web/test-results/
 internal/dashboard/dist/*
 !internal/dashboard/dist/index.html
+
+# root-level compiled binaries (build artifacts, never committed)
+/hookrail-admin
+/hookrail-api
+/hookrail-ctl
+/hookrail-dashboard
+/hookrail-worker
+
+# local-only explainer doc (kept on disk, not committed)
+docs/hookrail-explained.md
