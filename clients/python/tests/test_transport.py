@@ -5,8 +5,23 @@ from email.utils import format_datetime
 
 import pytest
 
-from hookrail._transport import RetryPolicy, compute_delay, is_retryable, parse_retry_after
-from hookrail.errors import HookrailConfigError
+from hookrail._transport import (
+    Retry,
+    RetryController,
+    RetryPolicy,
+    Stop,
+    compute_delay,
+    is_retryable,
+    map_to_error,
+    parse_retry_after,
+)
+from hookrail.errors import (
+    AuthenticationError,
+    ConflictError,
+    HookrailConfigError,
+    RateLimitError,
+    ServerError,
+)
 
 
 def test_defaults_are_valid() -> None:
@@ -93,3 +108,42 @@ def test_retry_after_is_a_floor_not_shortened() -> None:
     p = RetryPolicy(base=0.2, cap=10.0)
     d = compute_delay(0, p, retry_after=5.0, rng=random.Random(2))
     assert d >= 5.0
+
+
+def test_map_to_error_table() -> None:
+    assert map_to_error(200, None, None) is None
+    assert isinstance(map_to_error(401, None, None), AuthenticationError)
+    assert isinstance(map_to_error(409, None, None), ConflictError)
+    assert isinstance(map_to_error(503, None, None), ServerError)
+    rl = map_to_error(429, None, retry_after=2.0)
+    assert isinstance(rl, RateLimitError) and rl.retry_after == 2.0
+
+
+def test_controller_retries_then_exhausts_with_wrap() -> None:
+    pol = RetryPolicy(max_retries=2, base=0.01, cap=0.02, max_elapsed=10.0)
+    c = RetryController(policy=pol, start=0.0)
+    rng = random.Random(0)
+    assert isinstance(c.decide(0, 503, None, now=0.0, rng=rng), Retry)
+    assert isinstance(c.decide(1, 503, None, now=0.1, rng=rng), Retry)
+    final = c.decide(2, 503, None, now=0.2, rng=rng)  # attempts exhausted (retryable)
+    assert isinstance(final, Stop) and final.wrap is True  # -> client raises RetryError(from last)
+
+
+def test_controller_permanent_409_is_unwrapped() -> None:
+    c = RetryController(policy=RetryPolicy(), start=0.0)
+    out = c.decide(0, 409, None, now=0.0, rng=random.Random(0))
+    assert isinstance(out, Stop) and out.wrap is False  # -> client raises the typed ConflictError
+
+
+def test_controller_stops_when_retry_after_floor_exceeds_deadline() -> None:
+    pol = RetryPolicy(max_retries=5, base=0.2, cap=10.0, max_elapsed=10.0)
+    c = RetryController(policy=pol, start=0.0)
+    out = c.decide(0, 503, retry_after=999.0, now=5.0, rng=random.Random(0))
+    assert isinstance(out, Stop) and out.wrap is True  # floor (999s) won't fit remaining 5s
+
+
+def test_controller_retries_when_retry_after_fits_remaining() -> None:
+    pol = RetryPolicy(max_retries=5, base=0.2, cap=10.0, max_elapsed=10.0)
+    c = RetryController(policy=pol, start=0.0)
+    out = c.decide(0, 503, retry_after=3.0, now=5.0, rng=random.Random(0))  # 3s fits remaining 5s
+    assert isinstance(out, Retry) and out.delay <= 5.0  # clipped to remaining budget
