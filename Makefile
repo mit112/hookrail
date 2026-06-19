@@ -23,3 +23,4 @@ web-build:
 	cd clients/web && npm ci && npm run build
 dashboard-assets: web-build
 	cp -r clients/web/dist internal/dashboard/dist
+web-e2e: ; ROOT=$(CURDIR) bash scripts/web-e2e.sh && test "$$(docker compose -f deploy/compose/docker-compose.yml ps -q | wc -l | tr -d ' ')" = "0"
