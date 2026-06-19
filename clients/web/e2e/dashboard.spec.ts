@@ -72,8 +72,15 @@ test.describe("Dashboard e2e", () => {
     await page.goto('/deliveries');
     await expect(page).toHaveURL(/\/deliveries/);
 
-    // 15. Look for a delivery row showing "succeeded" within 30 seconds
-    const succeeded = page.locator("text=succeeded").first();
-    await expect(succeeded).toBeVisible({ timeout: 30_000 });
+    // 15. Poll the deliveries view until a delivery shows "succeeded".
+    //     The Deliveries view fetches once on mount and does not auto-refetch,
+    //     so we reload on each attempt to observe the pending→succeeded
+    //     transition (the plan's "poll the deliveries view" intent).
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator("text=succeeded").first()).toBeVisible({
+        timeout: 2_000,
+      });
+    }).toPass({ timeout: 45_000 });
   });
 });
