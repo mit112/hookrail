@@ -1,8 +1,10 @@
 import math
+from datetime import datetime, timezone
+from email.utils import format_datetime
 
 import pytest
 
-from hookrail._transport import RetryPolicy
+from hookrail._transport import RetryPolicy, is_retryable, parse_retry_after
 from hookrail.errors import HookrailConfigError
 
 
@@ -25,3 +27,48 @@ def test_defaults_are_valid() -> None:
 def test_invalid_policies_raise(kwargs: dict) -> None:
     with pytest.raises(HookrailConfigError):
         RetryPolicy(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        (200, False),
+        (400, False),
+        (401, False),
+        (404, False),
+        (409, False),
+        (413, False),
+        (408, True),
+        (425, True),
+        (429, True),
+        (500, True),
+        (502, True),
+        (503, True),
+        (504, True),
+        (599, True),
+    ],
+)
+def test_is_retryable(status: int, expected: bool) -> None:
+    assert is_retryable(status) is expected
+
+
+def test_retry_after_seconds() -> None:
+    assert parse_retry_after("2", now=1000.0) == 2.0
+
+
+def test_retry_after_garbage_is_none() -> None:
+    assert parse_retry_after("soon", now=1000.0) is None
+    assert parse_retry_after(None, now=1000.0) is None
+
+
+def test_retry_after_http_date_uses_injected_now() -> None:
+    future = datetime(2030, 1, 1, 0, 0, 30, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp()
+    secs = parse_retry_after(format_datetime(future, usegmt=True), now=now)
+    assert secs is not None and abs(secs - 30.0) < 1.0
+
+
+def test_retry_after_past_date_clamps_to_zero() -> None:
+    past = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp()
+    assert parse_retry_after(format_datetime(past, usegmt=True), now=now) == 0.0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 
 from hookrail.errors import HookrailConfigError
 
@@ -33,3 +34,28 @@ class RetryPolicy:
             raise HookrailConfigError(
                 f"max_elapsed ({self.max_elapsed}) must be >= cap ({self.cap})"
             )
+
+
+def is_retryable(status: int | None) -> bool:
+    """Mirror internal/domain/classify.go:30 — 408/425/429 and any 5xx are retryable."""
+    if status is None:
+        return True  # transport-level failure (no response)
+    if status in (408, 425, 429):
+        return True
+    return status >= 500
+
+
+def parse_retry_after(value: str | None, now: float) -> float | None:
+    """RFC 7231 Retry-After: integer seconds, or an HTTP-date -> seconds from `now` (>= 0)."""
+    if value is None:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    return max(0.0, when.timestamp() - now)
