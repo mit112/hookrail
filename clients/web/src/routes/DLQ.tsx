@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useDLQ, type DLQFilters } from "../query/dlq";
+import { useReplay } from "../query/replay";
 import type { TDLQRow } from "../api/schemas";
 
 export function DLQ() {
@@ -15,6 +16,7 @@ export function DLQ() {
     Object.keys(filters).length > 0 ? filters : undefined,
     currentCursor || undefined,
   );
+  const replay = useReplay();
 
   const applyFilters = () => {
     const f: DLQFilters = {};
@@ -67,6 +69,7 @@ export function DLQ() {
             <th>Final Error</th>
             <th>Dead At</th>
             <th>Replayed At</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -77,10 +80,20 @@ export function DLQ() {
               <td>{d.final_error}</td>
               <td>{d.dead_at}</td>
               <td>{d.replayed_at || "—"}</td>
+              <td>
+                {!d.replayed_at && (
+                  <button onClick={() => replay.mutate(d.delivery_id)} disabled={replay.isPending}>
+                    Replay
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {replay.isError && (
+        <p role="alert">{String(replay.error)}</p>
+      )}
       {nextCursor && (
         <button onClick={() => setCursors((prev) => [...prev, nextCursor])}>
           Load more
