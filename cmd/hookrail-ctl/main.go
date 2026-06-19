@@ -18,7 +18,7 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate|retention> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate|retention|create-producer-key> [flags]")
 }
 
 func wantsHelp(args []string) bool {
@@ -93,6 +93,29 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("retention tick complete")
+		return
+	}
+	if os.Args[1] == "create-producer-key" {
+		fs := flag.NewFlagSet("create-producer-key", flag.ExitOnError)
+		name := fs.String("name", "dashboard", "human label for the key")
+		_ = fs.Parse(os.Args[2:])
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		s, err := store.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			slog.Error("store", "err", err)
+			os.Exit(1)
+		}
+		defer s.Close()
+		id, plaintext, err := s.CreateProducerKey(context.Background(), *name)
+		if err != nil {
+			slog.Error("create-producer-key", "err", err)
+			os.Exit(1)
+		}
+		fmt.Printf("producer_key=%s\nkey_id=%s\n", plaintext, id)
 		return
 	}
 	if os.Args[1] != "seed" {
