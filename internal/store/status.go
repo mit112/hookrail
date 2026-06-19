@@ -1,6 +1,11 @@
 package store
 
-import "context"
+import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+)
 
 type AttemptView struct {
 	AttemptNo    int    `json:"attempt_no"`     // resets on replay (§6)
@@ -29,6 +34,9 @@ func (s *Store) GetEventStatus(ctx context.Context, eventID string) (EventStatus
 	var st EventStatus
 	if err := s.Pool.QueryRow(ctx,
 		`SELECT id, topic FROM events WHERE id = $1`, eventID).Scan(&st.EventID, &st.Topic); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return st, ErrNotFound
+		}
 		return st, err
 	}
 	rows, err := s.Pool.Query(ctx,

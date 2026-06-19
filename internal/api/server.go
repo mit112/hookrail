@@ -128,7 +128,11 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
 	status, err := s.store.GetEventStatus(r.Context(), r.PathValue("id"))
 	if err != nil {
-		problem(w, http.StatusNotFound, "event not found", "no event with that id")
+		if errors.Is(err, store.ErrNotFound) {
+			problem(w, http.StatusNotFound, "event not found", "no event with that id")
+			return
+		}
+		problem(w, http.StatusInternalServerError, "internal error", "failed to load event status")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
