@@ -26,6 +26,8 @@ export function EndpointDetail() {
           </>
         )}
       </dl>
+      <Link to={`/endpoints/${data.id}/edit`}>Edit</Link>
+      {" | "}
       <Link to="/endpoints">← Back to endpoints</Link>
     </div>
   );

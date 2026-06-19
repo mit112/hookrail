@@ -32,6 +32,7 @@ export function Endpoints() {
   return (
     <div>
       <h1>Endpoints</h1>
+      <Link to="/endpoints/new">+ New endpoint</Link>
       <table>
         <thead>
           <tr>

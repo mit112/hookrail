@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { SessionGate } from "./auth/SessionGate";
 import { Endpoints } from "./routes/Endpoints";
 import { EndpointDetail } from "./routes/EndpointDetail";
+import { EndpointNew, EndpointEdit } from "./routes/EndpointForm";
 import { Subscriptions } from "./routes/Subscriptions";
 import { SubscriptionDetail } from "./routes/SubscriptionDetail";
 import { Deliveries } from "./routes/Deliveries";
@@ -14,7 +15,9 @@ export function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/endpoints" replace />} />
         <Route path="/endpoints" element={<Endpoints />} />
+        <Route path="/endpoints/new" element={<EndpointNew />} />
         <Route path="/endpoints/:id" element={<EndpointDetail />} />
+        <Route path="/endpoints/:id/edit" element={<EndpointEdit />} />
         <Route path="/subscriptions" element={<Subscriptions />} />
         <Route path="/subscriptions/:id" element={<SubscriptionDetail />} />
         <Route path="/deliveries" element={<Deliveries />} />
