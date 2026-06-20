@@ -55,10 +55,10 @@ patches:
           name: wait-producer-key
           image: busybox:1.36
           imagePullPolicy: Never
-          command: ["sh", "-c", "until [ -s /run/secrets/producer_key ]; do sleep 2; done"]
+          command: ["sh", "-c", "until [ -s /etc/producer-key/producer_key ]; do sleep 2; done"]
           volumeMounts:
             - name: producer-key
-              mountPath: /run/secrets
+              mountPath: /etc/producer-key
               readOnly: true
   # worker has 2 initContainers (wait-migrate + wait-redis)
   - target:
@@ -89,3 +89,18 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Never
+  # Dev-only: allow http:// URLs (SSRF policy) so admin can create endpoints
+  # pointing at the in-cluster test-receiver and worker can deliver to it.
+  # Dev-only: allow http:// URLs (SSRF policy) so admin can create endpoints
+  # pointing at the in-cluster test-receiver and worker can deliver to it.
+  # Also allow k3d's service CIDR (10.43.0.0/16) to accept ClusterIPs.
+  - target:
+      kind: ConfigMap
+      name: hookrail-config
+    patch: |-
+      - op: add
+        path: /data/HOOKRAIL_ALLOW_HTTP
+        value: "true"
+      - op: add
+        path: /data/HOOKRAIL_ALLOW_CIDRS
+        value: "10.43.0.0/16"

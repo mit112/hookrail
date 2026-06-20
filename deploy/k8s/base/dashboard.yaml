@@ -54,10 +54,10 @@ spec:
                   name: hookrail-dashboard
                   key: session_key
             - name: HOOKRAIL_PRODUCER_KEY_FILE
-              value: "/run/secrets/producer_key"
+              value: "/etc/producer-key/producer_key"
           volumeMounts:
             - name: producer-key
-              mountPath: /run/secrets
+              mountPath: /etc/producer-key
               readOnly: true
           readinessProbe:
             httpGet:

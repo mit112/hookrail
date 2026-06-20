@@ -39,20 +39,33 @@ KEY=$(kubectl -n "$NS" logs job/dashboard-keygen | /usr/bin/sed -n 's/^producer_
 kubectl -n "$NS" create secret generic hookrail-dashboard-producer-key --from-literal=producer_key="$KEY"
 for d in api worker scheduler admin dashboard; do kubectl -n "$NS" rollout status deploy/$d --timeout=120s; done
 # e2e flow over port-forward (NOT NodePort — fold #10; port-forward bypasses the default-deny netpol):
-kubectl -n "$NS" port-forward svc/api 18080:8080 >/dev/null 2>&1 & PF=$!; sleep 2
-ADMIN_PF_PORT=18082; kubectl -n "$NS" port-forward svc/admin $ADMIN_PF_PORT:8082 >/dev/null 2>&1 & PFA=$!; sleep 2
+kubectl -n "$NS" port-forward svc/api 18080:8080 >/dev/null 2>&1 & PF=$!; sleep 3
+ADMIN_PF_PORT=18082; kubectl -n "$NS" port-forward svc/admin $ADMIN_PF_PORT:8082 >/dev/null 2>&1 & PFA=$!; sleep 3
+# verify port-forwards are actually working
+echo "DEBUG: checking port-forwards..." >&2
+/usr/bin/curl -s --connect-timeout 5 --max-time 10 localhost:18080/healthz || echo "DEBUG: api healthz failed" >&2
+/usr/bin/curl -s --connect-timeout 5 --max-time 10 localhost:$ADMIN_PF_PORT/healthz || echo "DEBUG: admin healthz failed" >&2
 trap 'kill $PF $PFA 2>/dev/null; rm -f "$KCFG"; k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true' EXIT
 TOK=dev-admin-token-001   # matches dev-secret
 # create endpoint (→ test-receiver) + subscription via admin:
-EP=$(/usr/bin/curl -s --connect-timeout 5 --max-time 30 -XPOST localhost:$ADMIN_PF_PORT/v1/endpoints -H "Authorization: Bearer $TOK" \
-     -H 'Content-Type: application/json' -d '{"url":"http://test-receiver:9090/hook"}' | jq -r .id)
-/usr/bin/curl -s --connect-timeout 5 --max-time 30 -XPOST localhost:$ADMIN_PF_PORT/v1/subscriptions -H "Authorization: Bearer $TOK" \
-     -H 'Content-Type: application/json' -d "{\"endpoint_id\":\"$EP\",\"topic_pattern\":\"e2e.*\"}" >/dev/null
+EP_RESP=$(/usr/bin/curl -s --connect-timeout 5 --max-time 30 -XPOST localhost:$ADMIN_PF_PORT/v1/endpoints -H "Authorization: Bearer $TOK" \
+     -H 'Content-Type: application/json' -d '{"url":"http://test-receiver:9090/succeed"}')
+echo "DEBUG: endpoint response: $EP_RESP" >&2
+EP=$(echo "$EP_RESP" | jq -r .id)
+echo "DEBUG: endpoint id: $EP" >&2
+SUB_RESP=$(/usr/bin/curl -s --connect-timeout 5 --max-time 30 -XPOST localhost:$ADMIN_PF_PORT/v1/subscriptions -H "Authorization: Bearer $TOK" \
+     -H 'Content-Type: application/json' -d "{\"endpoint_id\":\"$EP\",\"topic_pattern\":\"e2e.*\"}")
+echo "DEBUG: subscription response: $SUB_RESP" >&2
 # ingest via the public producer API with the provisioned key, then poll the event to succeeded:
-EV=$(/usr/bin/curl -s --connect-timeout 5 --max-time 30 -XPOST localhost:18080/v1/events -H "Authorization: Bearer $KEY" \
-     -H 'Content-Type: application/json' -d '{"topic":"e2e.test","payload":{"hi":1}}' | jq -r .event_id)
+INGEST_RESP=$(/usr/bin/curl -s --connect-timeout 5 --max-time 30 -XPOST localhost:18080/v1/events -H "Authorization: Bearer $KEY" \
+     -H 'Content-Type: application/json' -d '{"topic":"e2e.test","payload":{"hi":1}}')
+echo "DEBUG: ingest response: $INGEST_RESP" >&2
+EV=$(echo "$INGEST_RESP" | jq -r .event_id)
+echo "DEBUG: event_id: $EV" >&2
 for i in $(seq 1 30); do
-  S=$(/usr/bin/curl -s --connect-timeout 5 --max-time 30 localhost:18080/v1/events/"$EV" -H "Authorization: Bearer $KEY" | jq -r '.deliveries[0].state')
+  STATUS_RESP=$(/usr/bin/curl -s --connect-timeout 5 --max-time 30 localhost:18080/v1/events/"$EV" -H "Authorization: Bearer $KEY")
+  S=$(echo "$STATUS_RESP" | jq -r '.deliveries[0].state // "null"')
+  echo "DEBUG: poll $i state=$S response=$STATUS_RESP" >&2
   [ "$S" = succeeded ] && { echo "k8s-e2e OK"; exit 0; }
   sleep 2
 done
