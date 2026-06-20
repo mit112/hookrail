@@ -35,10 +35,15 @@ func (c *Compose) base(args ...string) []string {
 }
 
 func (c *Compose) docker(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(ctx, "docker", args...) //nolint:gosec
+	env := os.Environ()
 	if os.Getenv("HOOKRAIL_MASTER_KEY") == "" {
-		cmd.Env = append(os.Environ(), "HOOKRAIL_MASTER_KEY="+defaultMaster)
+		env = append(env, "HOOKRAIL_MASTER_KEY="+defaultMaster)
 	}
+	if v := os.Getenv("BUILDX_CONFIG"); v != "" {
+		env = append(env, "BUILDX_CONFIG="+v)
+	}
+	cmd.Env = env
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	return out.Bytes(), cmd.Run()
@@ -89,10 +94,15 @@ type Injector struct {
 
 func NewInjector(c *Compose) *Injector {
 	return &Injector{C: c, Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec
+		env := os.Environ()
 		if os.Getenv("HOOKRAIL_MASTER_KEY") == "" {
-			cmd.Env = append(os.Environ(), "HOOKRAIL_MASTER_KEY="+defaultMaster)
+			env = append(env, "HOOKRAIL_MASTER_KEY="+defaultMaster)
 		}
+		if v := os.Getenv("BUILDX_CONFIG"); v != "" {
+			env = append(env, "BUILDX_CONFIG="+v)
+		}
+		cmd.Env = env
 		var out bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &out
 		return out.Bytes(), cmd.Run()
