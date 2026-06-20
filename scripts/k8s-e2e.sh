@@ -6,8 +6,10 @@ trap 'rm -f "$KCFG"; k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true' EXIT
 k3d cluster create "$CLUSTER" --wait --kubeconfig-switch-context=false
 # k3d cluster create writes to $KUBECONFIG when set (avoids ~/.kube permissions)
 [ -s "$KCFG" ] || { echo "kubeconfig not populated"; exit 1; }
-DOCKER_BUILDKIT=0 docker build -t hookrail:e2e .
-DOCKER_BUILDKIT=0 docker build -t hookrail-dashboard:e2e --target dashboard .
+# BuildKit required: Dockerfile uses `FROM --platform=$BUILDPLATFORM` (a BuildKit-only
+# auto arg); under the legacy builder $BUILDPLATFORM is empty → `--platform=` parse error.
+DOCKER_BUILDKIT=1 docker build -t hookrail:e2e .
+DOCKER_BUILDKIT=1 docker build -t hookrail-dashboard:e2e --target dashboard .
 # Pre-pull + import all images into k3d (Deployments use imagePullPolicy: Never;
 # Jobs use it for containers/0 too, so external images must be imported)
 k3d image import hookrail:e2e hookrail-dashboard:e2e -c "$CLUSTER"
