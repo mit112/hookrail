@@ -173,6 +173,28 @@ for f, text in docs_text.items():
             for m in rx.finditer(line):
                 err(f, i, f"leak-scan: {label} -> {m.group(0)!r}")
 
+# ---- 2d: repo-wide public-tree leak guard ----
+# The authored-set scan (2c) only covers the docs this slice writes. A green verify must also
+# mean the ENTIRE tracked public .md surface carries no build-process/private references — so a
+# stray committed plan/notes file can never sit in the public repo behind a green check.
+REPO_LEAK = [
+    (re.compile(r'\b(deepseek|reasonix|ralph|boardwatch|joblens|projecty)\b', re.I), "build-process/private ref"),
+    (re.compile(r'\.agent/'), ".agent/ process path"),
+    (re.compile(r'\breasonix\.toml\b', re.I), "loop config ref"),
+]
+tracked_md = subprocess.run(["git", "ls-files", "*.md"], cwd=ROOT,
+                            capture_output=True, text=True, check=True).stdout.split()
+for f in tracked_md:
+    try:
+        text = read(f)
+    except OSError:
+        continue
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = mask_allowed(raw)
+        for rx, label in REPO_LEAK:
+            for m in rx.finditer(line):
+                err(f, i, f"public-tree leak-scan: {label} -> {m.group(0)!r}")
+
 if errors:
     print("DOCS-VERIFY FAIL:")
     for e in errors:
