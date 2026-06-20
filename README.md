@@ -53,12 +53,12 @@ enumerated in the design doc).
 
 ```bash
 git clone https://github.com/mit112/hookrail && cd hookrail
-cp .env.example .env
+export HOOKRAIL_MASTER_KEY=$(openssl rand -hex 32)   # 64 hex chars; the stack requires it
 make up && make seed     # prints your producer key + endpoint secret
 curl -X POST localhost:8080/v1/events \
   -H "Authorization: Bearer <producer key>" -H "Content-Type: application/json" \
-  -d '{"topic":"demo.hello","payload":{"msg":"hi"}}'
-# watch it arrive: curl "localhost:9090/received?delivery_id=<id>"
+  -d '{"topic":"demo.hello","payload":{"msg":"hi"}}'   # -> 202 {event_id, delivery_ids}
+# watch it arrive (receipt count -> 1): curl "localhost:9090/received?delivery_id=<id>"
 ```
 
 Observability ships with the stack: Grafana at `:3000` (datasource provisioned;
