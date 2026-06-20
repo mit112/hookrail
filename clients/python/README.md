@@ -4,6 +4,9 @@ Python client for [Hookrail](https://github.com/mit112/hookrail) — durable,
 at-least-once webhook delivery. Covers the public producer surface: send events,
 check delivery status, and verify incoming webhook signatures.
 
+Current release: **0.1.0**. To self-host the service, see the
+[Hookrail quickstart](https://github.com/mit112/hookrail#quickstart-60-seconds).
+
 ---
 
 ## Install
