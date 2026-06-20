@@ -253,7 +253,8 @@ Tunnel, exposing the Ingest API and Dashboard on public hostnames. The admin
 API is **not** exposed outside the cluster (defense-in-depth via NetworkPolicy).
 
 **Prerequisites:** k3s installed on the target host, `kubectl` v1.33+,
-`kustomize` (built into kubectl v1.33), Docker (for building/pushing images),
+the standalone `kustomize` binary (needed for `kustomize edit`; `kubectl
+kustomize` only renders), Docker (for building/pushing images),
 `hookrail-ctl` binary or the Hookrail repo cloned, a Cloudflare account with a
 tunnel created (token available), and two DNS hostnames pointing to the tunnel
 (one for ingest, one for dashboard).
@@ -334,10 +335,11 @@ placeholders:
 Use the exact digest from GHCR (prevents accidental roll-forward):
 
 ```bash
-kubectl kustomize edit set image \
-  hookrail=ghcr.io/mit112/hookrail@sha256:<digest> \
-  hookrail-dashboard=ghcr.io/mit112/hookrail-dashboard@sha256:<digest> \
-  -k deploy/k8s/overlays/prod
+# `kustomize edit` requires the standalone kustomize binary and operates on the
+# kustomization in the current directory (kubectl kustomize only renders).
+( cd deploy/k8s/overlays/prod && kustomize edit set image \
+    hookrail=ghcr.io/mit112/hookrail@sha256:<digest> \
+    hookrail-dashboard=ghcr.io/mit112/hookrail-dashboard@sha256:<digest> )
 ```
 
 Replace `<digest>` with the `sha256:...` from the latest `:main` tag on GHCR.

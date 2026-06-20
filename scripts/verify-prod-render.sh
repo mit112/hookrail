@@ -17,15 +17,36 @@ if ! echo "$RENDERED" | grep -q 'app: cloudflared'; then
 fi
 echo "OK: cloudflared present"
 
-# 3. prod NetworkPolicy must exist
-if ! echo "$RENDERED" | grep -q 'name: allow-cloudflared-to-api'; then
-  echo "FAIL: prod render missing allow-cloudflared-to-api NetworkPolicy" >&2
+# 3. prod NetworkPolicy must exist (both cloudflared allows + default-deny)
+for np in allow-cloudflared-to-api allow-cloudflared-to-dashboard default-deny-ingress; do
+  if ! echo "$RENDERED" | grep -q "name: $np"; then
+    echo "FAIL: prod render missing NetworkPolicy $np" >&2
+    exit 1
+  fi
+done
+echo "OK: prod networkpolicies present (cloudflared allows + default-deny)"
+
+# 4. Exposure contract: cloudflared ingress must NOT route admin.
+#    Match only the cloudflared ingress form (`service: http://admin...`); the
+#    dashboard's in-cluster BFF env (HOOKRAIL_ADMIN_URL: http://admin:8082) is
+#    legitimate and must not trip this guard.
+if echo "$RENDERED" | grep -qE 'service:[[:space:]]*http://admin'; then
+  echo "FAIL: cloudflared routes admin (admin must never be externally exposed)" >&2
   exit 1
 fi
-echo "OK: prod networkpolicy present"
+echo "OK: admin not routed by cloudflared"
 
-# 4. Guard: NO dev-only resources
-for name in test-receiver dev-secret dashboard-keygen db-bootstrap ephemeral-jobs-netpol test-receiver-netpol; do
+# 5. Guard: NO inline Secret objects (all prod secrets are attended refs).
+#    dev-secret.yaml renders Secrets named hookrail-{db,app,admin,dashboard}, so a
+#    by-name grep can't catch it — assert there are zero Secret objects instead.
+if echo "$RENDERED" | grep -qE '^kind: Secret$'; then
+  echo "FAIL: prod render contains an inline Secret (dev-secret leak; prod secrets must be attended)" >&2
+  exit 1
+fi
+echo "OK: no inline Secret objects"
+
+# 6. Guard: NO dev-only workloads
+for name in test-receiver dashboard-keygen db-bootstrap ephemeral-jobs-netpol test-receiver-netpol; do
   if echo "$RENDERED" | grep -q "name: $name"; then
     echo "FAIL: prod render contains $name (dev artifact leak)" >&2
     exit 1
