@@ -141,6 +141,8 @@ time.
 | `RETENTION_INTERVAL` | `1h` | Janitor loop interval |
 | `RETENTION_BATCH` | `5000` | Batch size per pass |
 | `RETENTION_TICK_BUDGET` | `60s` | Max wall-clock time per tick |
+| `RETENTION_IDEM_HOURS` | `24h` | TTL for idempotency keys before purge |
+| `RETENTION_STREAM_MAXLEN` | `100000` | Approx max Redis stream length (trim cap) |
 | `RETENTION_ENABLED` | `true` | Set to `false` to disable the janitor |
 
 ## Deploy to k3s
