@@ -5,16 +5,18 @@ RUN npm ci
 COPY clients/web/ .
 RUN npm run build
 
-FROM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/ ./cmd/...
+RUN GOARCH=$TARGETARCH CGO_ENABLED=0 go build -o /out/ ./cmd/...
 
 FROM build AS dashboard-build
+ARG TARGETARCH
 COPY --from=web-assets /web/dist internal/dashboard/dist
-RUN CGO_ENABLED=0 go build -o /out/hookrail-dashboard ./cmd/hookrail-dashboard
+RUN GOARCH=$TARGETARCH CGO_ENABLED=0 go build -o /out/hookrail-dashboard ./cmd/hookrail-dashboard
 
 FROM alpine:3.20 AS dashboard
 RUN apk add --no-cache ca-certificates
