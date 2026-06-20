@@ -20,6 +20,13 @@ jobs:
         with: { go-version: "1.24" }
       - run: go vet ./...
       - run: go test ./... -race -count=1
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: bash scripts/docs-verify.sh
   web:
     runs-on: ubuntu-latest
     steps:
