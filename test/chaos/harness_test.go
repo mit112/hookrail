@@ -46,7 +46,10 @@ func (c *Compose) docker(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Env = env
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	return out.Bytes(), cmd.Run()
+	// NB: capture output AFTER Run() returns. `return out.Bytes(), cmd.Run()`
+	// evaluates out.Bytes() first (Go left-to-right return eval) → empty slice.
+	err := cmd.Run()
+	return out.Bytes(), err
 }
 
 func (c *Compose) Up(ctx context.Context) error {
@@ -55,7 +58,10 @@ func (c *Compose) Up(ctx context.Context) error {
 	}
 	return nil
 }
-func (c *Compose) Down(ctx context.Context) error { _, err := c.docker(ctx, c.base("down", "-v")...); return err }
+func (c *Compose) Down(ctx context.Context) error {
+	_, err := c.docker(ctx, c.base("down", "-v")...)
+	return err
+}
 func (c *Compose) Run(ctx context.Context, svc string, args ...string) ([]byte, error) {
 	return c.docker(ctx, c.base(append([]string{"run", "--rm", svc}, args...)...)...)
 }
@@ -66,7 +72,9 @@ func (c *Compose) Restart(ctx context.Context, svcs ...string) error {
 	_, err := c.docker(ctx, c.base(append([]string{"restart"}, svcs...)...)...)
 	return err
 }
-func (c *Compose) PS(ctx context.Context) ([]byte, error) { return c.docker(ctx, c.base("ps", "-q")...) }
+func (c *Compose) PS(ctx context.Context) ([]byte, error) {
+	return c.docker(ctx, c.base("ps", "-q")...)
+}
 
 func (c *Compose) WaitReady(ctx context.Context, url string) error {
 	deadline := time.Now().Add(120 * time.Second)
@@ -105,7 +113,8 @@ func NewInjector(c *Compose) *Injector {
 		cmd.Env = env
 		var out bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &out
-		return out.Bytes(), cmd.Run()
+		err := cmd.Run() // capture output AFTER Run() (see Compose.docker)
+		return out.Bytes(), err
 	}}
 }
 
@@ -114,10 +123,12 @@ func (i *Injector) compose(ctx context.Context, sub, svc string) error {
 	_, err := i.Run(ctx, args[0], args[1:]...)
 	return err
 }
-func (i *Injector) Kill(ctx context.Context, svc string) error    { return i.compose(ctx, "kill", svc) }
-func (i *Injector) Pause(ctx context.Context, svc string) error   { return i.compose(ctx, "pause", svc) }
-func (i *Injector) Unpause(ctx context.Context, svc string) error { return i.compose(ctx, "unpause", svc) }
-func (i *Injector) Start(ctx context.Context, svc string) error   { return i.compose(ctx, "start", svc) }
+func (i *Injector) Kill(ctx context.Context, svc string) error  { return i.compose(ctx, "kill", svc) }
+func (i *Injector) Pause(ctx context.Context, svc string) error { return i.compose(ctx, "pause", svc) }
+func (i *Injector) Unpause(ctx context.Context, svc string) error {
+	return i.compose(ctx, "unpause", svc)
+}
+func (i *Injector) Start(ctx context.Context, svc string) error { return i.compose(ctx, "start", svc) }
 
 // ---- Load driver ---------------------------------------------------------
 
