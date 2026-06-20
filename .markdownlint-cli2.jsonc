@@ -1,0 +1,13 @@
+{
+  // Hookrail docs lint config. Relaxations chosen so prose + badges + wide tables pass.
+  "config": {
+    "default": true,
+    "MD013": false,            // line length: off (prose + tables + long URLs)
+    "MD033": false,            // inline HTML: allowed (badges, <br>)
+    "MD041": false,            // first line need not be a top-level heading (badges block)
+    "MD024": { "siblings_only": true }, // duplicate headings OK if not siblings
+    "MD029": { "style": "ordered" }
+  },
+  "globs": [],                 // file list is passed explicitly by docs-verify.sh
+  "gitignore": true
+}
