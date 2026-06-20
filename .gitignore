@@ -28,3 +28,7 @@ internal/dashboard/dist/*
 
 # local-only explainer doc (kept on disk, not committed)
 docs/hookrail-explained.md
+
+# build-process plan docs — kept on disk, never published (contain internal
+# tooling references; the public repo must not carry them)
+docs/superpowers/
