@@ -17,7 +17,7 @@ pip install hookrail
 uv add hookrail
 ```
 
-Requires Python **3.10–3.13**.
+Requires Python **3.10+** (tested on 3.10–3.13).
 
 ---
 

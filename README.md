@@ -95,9 +95,8 @@ session cookie; the BFF proxies an allowlist of admin routes plus one test-event
 route.
 
 ```bash
-make web-build
 docker compose -f deploy/compose/docker-compose.yml up -d --build dashboard
-# Open http://localhost:8085
+# Open http://localhost:8085 — the image builds the SPA itself
 ```
 
 Environment variables, auth model, and run details: see

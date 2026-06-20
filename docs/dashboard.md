@@ -9,15 +9,16 @@ native test-event route.
 ## Run it
 
 ```bash
-make web-build
 docker compose -f deploy/compose/docker-compose.yml up -d --build dashboard
 # Open http://localhost:8085, log in with the password from dev config
 ```
 
-Or in one command (builds the SPA, starts the stack, prints the URL):
+The `dashboard` image is multi-stage and builds the SPA itself, so no separate
+`make web-build` is needed for the Docker path (it is only needed to run the Go
+binary outside Docker). One-liner that starts the stack and prints the URL:
 
 ```bash
-make web-build && docker compose -f deploy/compose/docker-compose.yml up -d --build dashboard && echo "http://localhost:8085"
+docker compose -f deploy/compose/docker-compose.yml up -d --build dashboard && echo "http://localhost:8085"
 ```
 
 ## Auth model
@@ -37,7 +38,7 @@ make web-build && docker compose -f deploy/compose/docker-compose.yml up -d --bu
 | `HOOKRAIL_DASHBOARD_SESSION_KEY` | — | HMAC signing key, ≥32 bytes (required) |
 | `HOOKRAIL_DASHBOARD_SESSION_KEY_PREVIOUS` | — | Previous signing key for zero-downtime rotation |
 | `HOOKRAIL_ADMIN_TOKEN` | — | Admin API bearer token for proxied admin calls (required) |
-| `HOOKRAIL_PRODUCER_KEY_FILE` | — | Path to a file containing the producer key (written by the compose provisioner) |
+| `HOOKRAIL_PRODUCER_KEY_FILE` | — | Path to a file containing the producer key (compose writes it via the provisioner; k3s mounts it from a Secret) |
 | `HOOKRAIL_ADMIN_URL` | `http://admin:8082` | Internal admin API base URL |
 | `HOOKRAIL_INGRESS_URL` | `http://api:8080` | Internal ingress API base URL |
 | `HOOKRAIL_DASHBOARD_ADDR` | `:8085` | Listen address |

@@ -179,7 +179,8 @@ curl -s --connect-timeout 5 http://<k3s-node-ip>:8082/healthz || echo "blocked (
   Prometheus, Jaeger, cloudflared) runs on one k3s node. Node failure takes
   everything down. Multi-node and HA are deferred to a future slice.
 - **Cloudflare Tunnel dependency.** Public access depends on the Cloudflare edge
-  and the `cloudflared` sidecar. A Cloudflare outage or tunnel disruption makes
+  and the `cloudflared` Deployment (the tunnel runs as its own standalone
+  Deployment, not a sidecar). A Cloudflare outage or tunnel disruption makes
   the service unreachable from the internet. Direct ingress (e.g. node-local
   reverse proxy with TLS termination) is deferred. Note this means public TLS is
   terminated at the Cloudflare edge — *direct* in-cluster TLS / WAF is the part
