@@ -5,6 +5,7 @@ resources:
   - dev-secret.yaml
   - test-receiver.yaml
   - test-receiver-netpol.yaml
+  - ephemeral-jobs-netpol.yaml
   - keygen-job.yaml
   - db-bootstrap.yaml
 images:

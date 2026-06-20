@@ -57,13 +57,7 @@ spec:
               app: dashboard
         - podSelector:
             matchLabels:
-              app: dashboard-keygen
-        - podSelector:
-            matchLabels:
               app: migrate
-        - podSelector:
-            matchLabels:
-              app: db-bootstrap
       ports:
         - port: 5432
 ---

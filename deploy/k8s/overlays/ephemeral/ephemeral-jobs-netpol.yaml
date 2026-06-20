@@ -1,0 +1,26 @@
+---
+# Ephemeral-only: the dashboard-keygen + db-bootstrap Jobs are overlay resources
+# (deploy/k8s/overlays/ephemeral). They need Postgres ingress, but kept OUT of the
+# base policy so the prod path never carries allow rules for harness-only
+# identities. NetworkPolicies are additive — this unions with allow-apps-to-postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ephemeral-jobs-to-postgres
+  namespace: hookrail
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-keygen
+        - podSelector:
+            matchLabels:
+              app: db-bootstrap
+      ports:
+        - port: 5432
