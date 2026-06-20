@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Hookrail API
   version: 0.1.0
-  description: Ingress surface (P0). Admin CRUD lands in P1. Errors are RFC 7807 problem+json.
+  description: Ingress + admin surface. Errors are RFC 7807 problem+json.
 servers:
   - url: http://localhost:8080
 security:
