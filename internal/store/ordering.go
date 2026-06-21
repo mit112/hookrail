@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -130,6 +131,106 @@ func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key 
 		return nil, err
 	}
 	// A blocked key (dead_lettered head) returns nil — nothing to wake.
+	if blockedReason != nil {
+		return nil, nil
+	}
+	return headID, nil
+}
+
+// SkipHead moves a dead-lettered head delivery to 'skipped' state and
+// advances the ordering key cursor. It is valid only when the delivery
+// is (a) dead_lettered, and (b) the current head per ordered_key_state.
+// Idempotent: if the delivery is already 'skipped', returns the current
+// head without error. Returns the new head delivery id (nil if drained).
+func (s *Store) SkipHead(ctx context.Context, deliveryID, operator, reason string) (*string, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Look up subscription_id and ordering_key for the delivery.
+	var subID, okey string
+	var orderingSeq int64
+	var state string
+	err = tx.QueryRow(ctx,
+		`SELECT subscription_id, ordering_key, ordering_seq, state
+		 FROM deliveries WHERE id = $1`, deliveryID).Scan(&subID, &okey, &orderingSeq, &state)
+	if err != nil {
+		return nil, fmt.Errorf("skip: lookup delivery: %w", err)
+	}
+	if okey == "" {
+		return nil, fmt.Errorf("skip: delivery %s is not ordered: %w", deliveryID, ErrConflict)
+	}
+
+	// Idempotency: if already skipped, return current head.
+	if state == "skipped" {
+		var headID *string
+		if err := tx.QueryRow(ctx,
+			`SELECT head_delivery_id FROM ordered_key_state
+			 WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, okey).Scan(&headID); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return headID, nil
+	}
+
+	// LOCK ORDER: lock ordered_key_state FOR UPDATE first
+	var cursorSeq int64
+	if err := tx.QueryRow(ctx,
+		`SELECT cursor_seq FROM ordered_key_state
+		 WHERE subscription_id=$1 AND ordering_key=$2 FOR UPDATE`,
+		subID, okey).Scan(&cursorSeq); err != nil {
+		return nil, fmt.Errorf("skip: lock key state: %w", err)
+	}
+
+	// Validate: must be the current head
+	if orderingSeq != cursorSeq {
+		return nil, fmt.Errorf("skip: delivery %s seq %d != cursor %d: %w",
+			deliveryID, orderingSeq, cursorSeq, ErrConflict)
+	}
+
+	// Validate: must be dead_lettered
+	if state != "dead_lettered" {
+		return nil, fmt.Errorf("skip: delivery %s state=%s, want dead_lettered: %w",
+			deliveryID, state, ErrConflict)
+	}
+
+	// Set state=skipped with audit columns
+	if _, err := tx.Exec(ctx,
+		`UPDATE deliveries SET
+			state = 'skipped',
+			skipped_by = $1,
+			skip_reason = $2,
+			skipped_at = now()
+		 WHERE id = $3 AND state = 'dead_lettered'`,
+		operator, reason, deliveryID); err != nil {
+		return nil, fmt.Errorf("skip: set skipped: %w", err)
+	}
+
+	// Recompute cursor (skipped ∈ T → cursor advances past this row)
+	if err := s.RecomputeCursor(ctx, tx, subID, okey); err != nil {
+		return nil, fmt.Errorf("skip: recompute cursor: %w", err)
+	}
+
+	// Read the new head
+	var headID *string
+	var blockedReason *string
+	if err := tx.QueryRow(ctx,
+		`SELECT head_delivery_id, blocked_reason FROM ordered_key_state
+		 WHERE subscription_id=$1 AND ordering_key=$2`,
+		subID, okey).Scan(&headID, &blockedReason); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	// If new head is blocked, return nil (nothing to wake)
 	if blockedReason != nil {
 		return nil, nil
 	}
