@@ -33,7 +33,7 @@ func TestReplayConcurrentExactlyOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			o, err := s.ReplayDeadLetter(context.Background(), id, time.Hour)
+			o, _, err := s.ReplayDeadLetter(context.Background(), id, time.Hour)
 			if err != nil {
 				t.Errorf("replay %d: %v", i, err)
 			}
@@ -80,7 +80,7 @@ func TestReplayStepTwoRollback(t *testing.T) {
 	ctx := context.Background()
 	id := seedDead(t, s, "rvc.*")
 	_, _ = s.Pool.Exec(ctx, `UPDATE deliveries SET state='in_flight', lease_until=now()+interval '30s' WHERE id=$1`, id)
-	out, err := s.ReplayDeadLetter(ctx, id, time.Hour)
+	out, _, err := s.ReplayDeadLetter(ctx, id, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestReplayThenClaimBumpsFence(t *testing.T) {
 	var cvBefore int64
 	_ = s.Pool.QueryRow(ctx, `SELECT claim_version FROM deliveries WHERE id=$1`, id).Scan(&cvBefore)
 
-	if out, err := s.ReplayDeadLetter(ctx, id, time.Hour); err != nil || out != store.ReplayOK {
+	if out, _, err := s.ReplayDeadLetter(ctx, id, time.Hour); err != nil || out != store.ReplayOK {
 		t.Fatalf("replay = %v %v, want ReplayOK", out, err)
 	}
 	var cvAfterReplay int64
@@ -127,24 +127,24 @@ func TestReplayClassification(t *testing.T) {
 	ctx := context.Background()
 
 	// unknown id → NotFound
-	if o, _ := s.ReplayDeadLetter(ctx, "does-not-exist", time.Hour); o != store.ReplayNotFound {
+	if o, _, _ := s.ReplayDeadLetter(ctx, "does-not-exist", time.Hour); o != store.ReplayNotFound {
 		t.Fatalf("unknown = %v, want NotFound", o)
 	}
 	// live (not dead) delivery → Conflict
 	live := mkDelivery(t, s)
-	if o, _ := s.ReplayDeadLetter(ctx, live, time.Hour); o != store.ReplayConflict {
+	if o, _, _ := s.ReplayDeadLetter(ctx, live, time.Hour); o != store.ReplayConflict {
 		t.Fatalf("live = %v, want Conflict", o)
 	}
 	// dead but past expiry → Gone
 	old := seedDead(t, s, "rp2.*")
 	_, _ = s.Pool.Exec(ctx, `UPDATE dead_letters SET dead_at = now() - interval '48 hours' WHERE delivery_id=$1`, old)
-	if o, _ := s.ReplayDeadLetter(ctx, old, time.Hour); o != store.ReplayGone {
+	if o, _, _ := s.ReplayDeadLetter(ctx, old, time.Hour); o != store.ReplayGone {
 		t.Fatalf("expired = %v, want Gone", o)
 	}
 	// deleted target → Conflict
 	delTgt := seedDead(t, s, "rp3.*")
 	_, _ = s.Pool.Exec(ctx, `UPDATE subscriptions SET deleted_at=now()`)
-	if o, _ := s.ReplayDeadLetter(ctx, delTgt, time.Hour); o != store.ReplayConflict {
+	if o, _, _ := s.ReplayDeadLetter(ctx, delTgt, time.Hour); o != store.ReplayConflict {
 		t.Fatalf("deleted-target = %v, want Conflict", o)
 	}
 }
@@ -184,7 +184,7 @@ func TestReplayAfterTombstoneSerializesCorrectly(t *testing.T) {
 	}
 
 	// 2. Replay with larger replayAge (40d) — CAS wins (dead_at >= now()-40d), but guard sees payload_size==0.
-	out, err := s.ReplayDeadLetter(ctx, id, 40*24*time.Hour)
+	out, _, err := s.ReplayDeadLetter(ctx, id, 40*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestReplayBlocksWhileTombstoneHoldsEventLock(t *testing.T) {
 	// then must block on FOR UPDATE OF e against tx A's event-row lock.
 	done := make(chan store.ReplayOutcome, 1)
 	go func() {
-		o, err := s.ReplayDeadLetter(context.Background(), id, time.Hour)
+		o, _, err := s.ReplayDeadLetter(context.Background(), id, time.Hour)
 		if err != nil {
 			t.Errorf("replay: %v", err)
 		}
@@ -288,7 +288,7 @@ func TestReplayOKWhenPayloadIntact(t *testing.T) {
 	id := seedDead(t, s, "rpi.*")
 
 	// Payload is intact (not tombstoned) — replay must succeed.
-	out, err := s.ReplayDeadLetter(ctx, id, time.Hour)
+	out, _, err := s.ReplayDeadLetter(ctx, id, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

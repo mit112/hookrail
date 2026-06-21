@@ -46,10 +46,9 @@ func (s *Server) listDLQ(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// replayDLQ is a stub; replaced in Task 13.
 func (s *Server) replayDLQ(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("delivery_id")
-	out, err := s.store.ReplayDeadLetter(r.Context(), id, s.replayAge)
+	out, headID, err := s.store.ReplayDeadLetter(r.Context(), id, s.replayAge)
 	if err != nil {
 		httpx.Problem(w, http.StatusServiceUnavailable, "replay failed", "query error")
 		return
@@ -57,7 +56,11 @@ func (s *Server) replayDLQ(w http.ResponseWriter, r *http.Request) {
 	switch out {
 	case store.ReplayOK:
 		// best-effort re-publish; sweeper repairs on failure (design §4.1 step 5)
-		if perr := s.queue.Publish(r.Context(), id); perr != nil {
+		publishID := id
+		if headID != nil {
+			publishID = *headID
+		}
+		if perr := s.queue.Publish(r.Context(), publishID); perr != nil {
 			// non-fatal: row is pending; the sweeper will pick it up
 			_ = perr
 		}
