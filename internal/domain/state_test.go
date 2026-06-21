@@ -50,3 +50,16 @@ func TestIsTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestOrderedTerminalSets(t *testing.T) {
+	for _, s := range []State{StateSucceeded, StateSkipped, StateCancelled} {
+		if Blocks(s) {
+			t.Fatalf("%s must not block a key", s)
+		}
+	}
+	for _, s := range []State{StatePending, StateInFlight, StateRetryScheduled, StateDeadLettered} {
+		if !Blocks(s) {
+			t.Fatalf("%s must block a key", s)
+		}
+	}
+}
