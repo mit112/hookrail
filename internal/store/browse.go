@@ -15,14 +15,15 @@ type DeliveryFilter struct {
 }
 
 type DeliveryListRow struct {
-	ID         string `json:"id"`
-	EventID    string `json:"event_id"`
-	EndpointID string `json:"endpoint_id"`
-	State      string `json:"state"`
+	ID          string  `json:"id"`
+	EventID     string  `json:"event_id"`
+	EndpointID  string  `json:"endpoint_id"`
+	State       string  `json:"state"`
+	OrderingKey *string `json:"ordering_key,omitempty"` // NULL for unordered deliveries
 }
 
 func (s *Store) ListDeliveries(ctx context.Context, f DeliveryFilter) ([]DeliveryListRow, error) {
-	q := `SELECT d.id, d.event_id, d.endpoint_id, d.state::text
+	q := `SELECT d.id, d.event_id, d.endpoint_id, d.state::text, d.ordering_key
 	      FROM deliveries d JOIN events e ON e.id = d.event_id
 	      WHERE ($1 = '' OR d.id < $1)`
 	args := []any{f.AfterID, f.Limit}
@@ -49,7 +50,7 @@ func (s *Store) ListDeliveries(ctx context.Context, f DeliveryFilter) ([]Deliver
 	var out []DeliveryListRow
 	for rows.Next() {
 		var d DeliveryListRow
-		if err := rows.Scan(&d.ID, &d.EventID, &d.EndpointID, &d.State); err != nil {
+		if err := rows.Scan(&d.ID, &d.EventID, &d.EndpointID, &d.State, &d.OrderingKey); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -60,6 +61,7 @@ func (s *Store) ListDeliveries(ctx context.Context, f DeliveryFilter) ([]Deliver
 type DeliveryTimeline struct {
 	DeliveryID        string        `json:"delivery_id"`
 	State             string        `json:"state"`
+	OrderingKey       *string       `json:"ordering_key,omitempty"` // NULL for unordered deliveries
 	AttemptsTruncated bool          `json:"attempts_truncated"`
 	Attempts          []AttemptView `json:"attempts"`
 }
@@ -68,8 +70,8 @@ func (s *Store) GetDeliveryTimeline(ctx context.Context, id string) (DeliveryTim
 	var tl DeliveryTimeline
 	var truncatedAt *string
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT id, state::text, (attempts_truncated_at IS NOT NULL)::text
-		 FROM deliveries WHERE id=$1`, id).Scan(&tl.DeliveryID, &tl.State, &truncatedAt); err != nil {
+		`SELECT id, state::text, ordering_key, (attempts_truncated_at IS NOT NULL)::text
+		 FROM deliveries WHERE id=$1`, id).Scan(&tl.DeliveryID, &tl.State, &tl.OrderingKey, &truncatedAt); err != nil {
 		return tl, err
 	}
 	tl.AttemptsTruncated = truncatedAt != nil && *truncatedAt == "true"
