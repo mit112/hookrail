@@ -100,3 +100,33 @@ func (s *Store) RecomputeCursor(ctx context.Context, tx pgx.Tx, subID, key strin
 		subID, key, terminalStates)
 	return err
 }
+
+// ApplyOrderedTerminal takes a FOR UPDATE lock on the ordered_key_state row
+// FIRST (LOCK ORDER), then recomputes the cursor via RecomputeCursor, and
+// returns the new head delivery id (nil if empty). No-op for ordering_key=="".
+// The caller publishes the returned head to Redis AFTER commit (store never
+// XADDs — BLOCKER-2).
+func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key string) (*string, error) {
+	if key == "" {
+		return nil, nil
+	}
+	// LOCK ORDER: lock ordered_key_state row FOR UPDATE first
+	var ok bool
+	if err := tx.QueryRow(ctx,
+		`SELECT true FROM ordered_key_state
+		 WHERE subscription_id=$1 AND ordering_key=$2 FOR UPDATE`,
+		subID, key).Scan(&ok); err != nil {
+		return nil, err
+	}
+	if err := s.RecomputeCursor(ctx, tx, subID, key); err != nil {
+		return nil, err
+	}
+	var headID *string
+	if err := tx.QueryRow(ctx,
+		`SELECT head_delivery_id FROM ordered_key_state
+		 WHERE subscription_id=$1 AND ordering_key=$2`,
+		subID, key).Scan(&headID); err != nil {
+		return nil, err
+	}
+	return headID, nil
+}

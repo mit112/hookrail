@@ -288,3 +288,114 @@ func TestRecomputeCursor(t *testing.T) {
 		}
 	})
 }
+
+func TestApplyOrderedTerminalConcurrent(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	keyID, subID := seedOrderedPipeline(t, st, "orders.*")
+
+	var endpointID string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT endpoint_id FROM subscriptions WHERE id=$1`, subID).Scan(&endpointID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed ordered_key_state for key "k1": seq_counter=2, cursor=1, backlog=2
+	_, err := st.Pool.Exec(ctx,
+		`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count)
+		 VALUES ($1, $2, 2, 1, 2)
+		 ON CONFLICT (subscription_id, ordering_key) DO NOTHING`,
+		subID, "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create two deliveries: seq=1 (pending), seq=2 (pending)
+	insertDelivery := func(seq int64, state string) string {
+		t.Helper()
+		eid := store.NewID()
+		did := store.NewID()
+		if _, err := st.Pool.Exec(ctx,
+			`INSERT INTO events (id, producer_key_id, topic, payload, payload_size)
+			 VALUES ($1, $2, 'orders.created', $3, $4)`, eid, keyID, []byte(`{}`), 2); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Pool.Exec(ctx,
+			`INSERT INTO deliveries (id, event_id, subscription_id, ordering_key, ordering_seq, state, next_attempt_at, endpoint_id)
+			 VALUES ($1, $2, $3, $4, $5, $6::delivery_state, now(), $7)`,
+			did, eid, subID, "k1", seq, state, endpointID); err != nil {
+			t.Fatal(err)
+		}
+		return did
+	}
+	did1 := insertDelivery(1, "pending")
+	did2 := insertDelivery(2, "pending")
+
+	// Two goroutines: both transition seq=1 → succeeded, then call ApplyOrderedTerminal.
+	// FOR UPDATE serializes them; cursor must never regress.
+	var wg sync.WaitGroup
+	results := make(chan *string, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tx, err := st.Pool.Begin(ctx)
+			if err != nil {
+				t.Errorf("begin tx: %v", err)
+				return
+			}
+			// Transition seq=1 to succeeded (only first goroutine affects a row)
+			if _, err := tx.Exec(ctx,
+				`UPDATE deliveries SET state='succeeded', lease_until=NULL
+				 WHERE id=$1 AND state='pending'`, did1); err != nil {
+				t.Errorf("update seq1: %v", err)
+				if rerr := tx.Rollback(ctx); rerr != nil {
+					t.Errorf("rollback: %v", rerr)
+				}
+				return
+			}
+			head, err := st.ApplyOrderedTerminal(ctx, tx, subID, "k1")
+			if err != nil {
+				t.Errorf("ApplyOrderedTerminal: %v", err)
+				if rerr := tx.Rollback(ctx); rerr != nil {
+					t.Errorf("rollback: %v", rerr)
+				}
+				return
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Errorf("commit: %v", err)
+				return
+			}
+			results <- head
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	// Collect unique non-nil heads
+	heads := map[string]bool{}
+	for h := range results {
+		if h != nil {
+			heads[*h] = true
+		}
+	}
+
+	// Assert final state: cursor=2, head=did2
+	var cursor int64
+	var headID *string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT cursor_seq, head_delivery_id FROM ordered_key_state
+		 WHERE subscription_id=$1 AND ordering_key=$2`,
+		subID, "k1").Scan(&cursor, &headID); err != nil {
+		t.Fatal(err)
+	}
+	if cursor != 2 {
+		t.Errorf("cursor_seq = %d, want 2 (must never regress)", cursor)
+	}
+	if headID == nil || *headID != did2 {
+		t.Errorf("head_delivery_id = %v, want %s", headID, did2)
+	}
+	if len(heads) > 1 {
+		t.Errorf("divergent heads returned: %v — FOR UPDATE serialization broken", heads)
+	}
+}
