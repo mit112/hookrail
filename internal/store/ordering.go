@@ -25,12 +25,10 @@ func (s *Store) AssignOrderingSeq(ctx context.Context, tx pgx.Tx, subID, key str
 	return seq, backlog, err
 }
 
-// RecomputeCursor recomputes the ordered_key_state row for a given
-// (subscription, ordering_key). The caller MUST hold the ordered_key_state
-// row FOR UPDATE before calling this. It sets cursor_seq from the
-// Global-Constraints derivation, recomputes backlog_count, and sets
-// head_delivery_id / blocked_reason / blocked_since from the head row.
-func (s *Store) RecomputeCursor(ctx context.Context, tx pgx.Tx, subID, key string) error {
+// RecomputeCursorTx is the package-level variant of RecomputeCursor.
+// It recomputes the ordered_key_state row for a given (subscription, ordering_key).
+// The caller MUST hold the ordered_key_state row FOR UPDATE before calling this.
+func RecomputeCursorTx(ctx context.Context, tx pgx.Tx, subID, key string) error {
 	// Derivation (Global Constraints verbatim):
 	// cursor_seq = COALESCE(
 	//   (SELECT min(ordering_seq) FROM deliveries
@@ -102,12 +100,16 @@ func (s *Store) RecomputeCursor(ctx context.Context, tx pgx.Tx, subID, key strin
 	return err
 }
 
-// ApplyOrderedTerminal takes a FOR UPDATE lock on the ordered_key_state row
-// FIRST (LOCK ORDER), then recomputes the cursor via RecomputeCursor, and
-// returns the new head delivery id (nil if empty or blocked). No-op for
-// ordering_key=="". The caller publishes the returned head to Redis AFTER
-// commit (store never XADDs — BLOCKER-2).
-func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key string) (*string, error) {
+// RecomputeCursor delegates to the package-level RecomputeCursorTx.
+func (s *Store) RecomputeCursor(ctx context.Context, tx pgx.Tx, subID, key string) error {
+	return RecomputeCursorTx(ctx, tx, subID, key)
+}
+
+// ApplyOrderedTerminalTx is the package-level terminal helper. Takes a FOR
+// UPDATE lock on the ordered_key_state row first (LOCK ORDER), then recomputes
+// the cursor, and returns the new head delivery id (nil if empty or blocked).
+// No-op for ordering_key=="". Used by cancelOrphanedTx which has no *Store.
+func ApplyOrderedTerminalTx(ctx context.Context, tx pgx.Tx, subID, key string) (*string, error) {
 	if key == "" {
 		return nil, nil
 	}
@@ -119,7 +121,7 @@ func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key 
 		subID, key).Scan(&ok); err != nil {
 		return nil, err
 	}
-	if err := s.RecomputeCursor(ctx, tx, subID, key); err != nil {
+	if err := RecomputeCursorTx(ctx, tx, subID, key); err != nil {
 		return nil, err
 	}
 	var headID *string
@@ -135,6 +137,15 @@ func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key 
 		return nil, nil
 	}
 	return headID, nil
+}
+
+// ApplyOrderedTerminal takes a FOR UPDATE lock on the ordered_key_state row
+// FIRST (LOCK ORDER), then recomputes the cursor via RecomputeCursor, and
+// returns the new head delivery id (nil if empty or blocked). No-op for
+// ordering_key=="". The caller publishes the returned head to Redis AFTER
+// commit (store never XADDs — BLOCKER-2).
+func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key string) (*string, error) {
+	return ApplyOrderedTerminalTx(ctx, tx, subID, key)
 }
 
 // SkipHead moves a dead-lettered head delivery to 'skipped' state and

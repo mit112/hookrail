@@ -97,6 +97,35 @@ func (s *Store) SoftDeleteEndpoint(ctx context.Context, id string) error {
 		 WHERE endpoint_id=$1 AND state IN ('pending','retry_scheduled')`, id); err != nil {
 		return err
 	}
+	// For ordered deliveries affected by the cancel, recompute the cursor.
+	type orderedKey struct {
+		subID string
+		key   string
+	}
+	var orderedKeys []orderedKey
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT subscription_id, ordering_key FROM deliveries
+		 WHERE endpoint_id=$1 AND state='cancelled' AND ordering_key IS NOT NULL`, id)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var k orderedKey
+		if err := rows.Scan(&k.subID, &k.key); err != nil {
+			rows.Close()
+			return err
+		}
+		orderedKeys = append(orderedKeys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, k := range orderedKeys {
+		if _, err := s.ApplyOrderedTerminal(ctx, tx, k.subID, k.key); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 
@@ -219,6 +248,31 @@ func (s *Store) SoftDeleteSubscription(ctx context.Context, id string) error {
 		 WHERE subscription_id=$1 AND state IN ('pending','retry_scheduled')`, id); err != nil {
 		return err
 	}
+	// For ordered deliveries affected by the cancel, recompute the cursor.
+	var orderedKeys []string
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT ordering_key FROM deliveries
+		 WHERE subscription_id=$1 AND state='cancelled' AND ordering_key IS NOT NULL`, id)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var okey string
+		if err := rows.Scan(&okey); err != nil {
+			rows.Close()
+			return err
+		}
+		orderedKeys = append(orderedKeys, okey)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, okey := range orderedKeys {
+		if _, err := s.ApplyOrderedTerminal(ctx, tx, id, okey); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 
@@ -239,7 +293,45 @@ func cancelOrphanedTx(ctx context.Context, tx pgx.Tx, batch int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return int(ct.RowsAffected()), nil
+	n := int(ct.RowsAffected())
+	if n == 0 {
+		return 0, nil
+	}
+	// For ordered deliveries affected by the cancel, recompute the cursor.
+	type orderedKey struct {
+		subID string
+		key   string
+	}
+	var orderedKeys []orderedKey
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT d.subscription_id, d.ordering_key FROM deliveries d
+		 JOIN subscriptions s ON s.id = d.subscription_id
+		 WHERE s.deleted_at IS NOT NULL
+		   AND d.state = 'cancelled'
+		   AND d.ordering_key IS NOT NULL
+		 ORDER BY d.subscription_id, d.ordering_key
+		 LIMIT $1`, batch)
+	if err != nil {
+		return 0, err
+	}
+	for rows.Next() {
+		var k orderedKey
+		if err := rows.Scan(&k.subID, &k.key); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		orderedKeys = append(orderedKeys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, k := range orderedKeys {
+		if _, err := ApplyOrderedTerminalTx(ctx, tx, k.subID, k.key); err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
 }
 
 func (s *Store) CancelOrphaned(ctx context.Context, batch int) (int, error) {
