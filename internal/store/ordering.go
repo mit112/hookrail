@@ -161,13 +161,15 @@ func (s *Store) SkipHead(ctx context.Context, deliveryID, operator, reason strin
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Look up subscription_id and ordering_key for the delivery.
+	// Locate the key: we need subscription_id + ordering_key to find the
+	// ordered_key_state row. We deliberately DO NOT trust state/ordering_seq
+	// read here — they are validated AFTER the key-state lock below (BLOCKER-1:
+	// reading state before the lock is a TOCTOU; Task 14 Step 3 prescribes
+	// locking ordered_key_state FIRST, then verifying head + dead_lettered).
 	var subID, okey string
-	var orderingSeq int64
-	var state string
 	err = tx.QueryRow(ctx,
-		`SELECT subscription_id, ordering_key, ordering_seq, state
-		 FROM deliveries WHERE id = $1`, deliveryID).Scan(&subID, &okey, &orderingSeq, &state)
+		`SELECT subscription_id, COALESCE(ordering_key, '')
+		 FROM deliveries WHERE id = $1`, deliveryID).Scan(&subID, &okey)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("skip: delivery %s: %w", deliveryID, ErrNotFound)
@@ -178,7 +180,28 @@ func (s *Store) SkipHead(ctx context.Context, deliveryID, operator, reason strin
 		return nil, fmt.Errorf("skip: delivery %s is not ordered: %w", deliveryID, ErrConflict)
 	}
 
-	// Idempotency: if already skipped, return current head.
+	// LOCK ORDER: lock ordered_key_state FOR UPDATE FIRST. Once held, no
+	// concurrent CompleteAttempt / DeadLetterExhausted / ReplayDeadLetter /
+	// SkipHead can transition this key's rows (they all take this lock first),
+	// so the state/seq re-read below is authoritative.
+	var cursorSeq int64
+	if err := tx.QueryRow(ctx,
+		`SELECT cursor_seq FROM ordered_key_state
+		 WHERE subscription_id=$1 AND ordering_key=$2 FOR UPDATE`,
+		subID, okey).Scan(&cursorSeq); err != nil {
+		return nil, fmt.Errorf("skip: lock key state: %w", err)
+	}
+
+	// Authoritative re-read of the delivery under the key-state lock.
+	var orderingSeq int64
+	var state string
+	if err := tx.QueryRow(ctx,
+		`SELECT ordering_seq, state FROM deliveries WHERE id = $1`,
+		deliveryID).Scan(&orderingSeq, &state); err != nil {
+		return nil, fmt.Errorf("skip: re-read delivery: %w", err)
+	}
+
+	// Idempotency: if already skipped, return current head, no error.
 	if state == "skipped" {
 		var headID *string
 		if err := tx.QueryRow(ctx,
@@ -193,15 +216,6 @@ func (s *Store) SkipHead(ctx context.Context, deliveryID, operator, reason strin
 		return headID, nil
 	}
 
-	// LOCK ORDER: lock ordered_key_state FOR UPDATE first
-	var cursorSeq int64
-	if err := tx.QueryRow(ctx,
-		`SELECT cursor_seq FROM ordered_key_state
-		 WHERE subscription_id=$1 AND ordering_key=$2 FOR UPDATE`,
-		subID, okey).Scan(&cursorSeq); err != nil {
-		return nil, fmt.Errorf("skip: lock key state: %w", err)
-	}
-
 	// Validate: must be the current head
 	if orderingSeq != cursorSeq {
 		return nil, fmt.Errorf("skip: delivery %s seq %d != cursor %d: %w",
@@ -214,16 +228,22 @@ func (s *Store) SkipHead(ctx context.Context, deliveryID, operator, reason strin
 			deliveryID, state, ErrConflict)
 	}
 
-	// Set state=skipped with audit columns
-	if _, err := tx.Exec(ctx,
+	// Set state=skipped with audit columns. We hold the key-state lock and
+	// re-read state above, so the guard cannot lose a race — but check
+	// RowsAffected anyway (BLOCKER-1: never report success on a no-op update).
+	ct, err := tx.Exec(ctx,
 		`UPDATE deliveries SET
 			state = 'skipped',
 			skipped_by = $1,
 			skip_reason = $2,
 			skipped_at = now()
 		 WHERE id = $3 AND state = 'dead_lettered'`,
-		operator, reason, deliveryID); err != nil {
+		operator, reason, deliveryID)
+	if err != nil {
 		return nil, fmt.Errorf("skip: set skipped: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return nil, fmt.Errorf("skip: delivery %s no longer dead_lettered: %w", deliveryID, ErrConflict)
 	}
 
 	// Recompute cursor (skipped ∈ T → cursor advances past this row)

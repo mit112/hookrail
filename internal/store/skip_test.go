@@ -5,6 +5,8 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -324,5 +326,86 @@ func TestSkipHeadIdempotent(t *testing.T) {
 	}
 	if cursor != 2 {
 		t.Fatalf("cursor after idempotent skip = %d, want 2", cursor)
+	}
+}
+
+// TestSkipHeadConcurrentReplayNoFalseSuccess is the BLOCKER-1 regression guard.
+// A SkipHead racing a ReplayDeadLetter on the same dead-lettered head must never
+// report success unless the row was ACTUALLY skipped. Before the fix, SkipHead
+// read the delivery state BEFORE locking ordered_key_state and ignored
+// RowsAffected, so a replay that won the key-state lock first flipped the row to
+// 'pending' while SkipHead still returned 200 "skipped" (skipping nothing).
+// Invariant under the fix: skipErr==nil  <=>  final delivery state == 'skipped'.
+func TestSkipHeadConcurrentReplayNoFalseSuccess(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	keyID, subID := seedOrderedPipeline(t, st, "orders.*")
+
+	var endpointID string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT endpoint_id FROM subscriptions WHERE id=$1`, subID).Scan(&endpointID); err != nil {
+		t.Fatal(err)
+	}
+
+	mkDelivery := func(okey string, seq int64, state string) string {
+		t.Helper()
+		eid := store.NewID()
+		did := store.NewID()
+		if _, err := st.Pool.Exec(ctx,
+			`INSERT INTO events (id, producer_key_id, topic, payload, payload_size)
+			 VALUES ($1, $2, 'orders.created', $3, $4)`, eid, keyID, []byte(`{}`), 2); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Pool.Exec(ctx,
+			`INSERT INTO deliveries (id, event_id, subscription_id, ordering_key, ordering_seq, state, next_attempt_at, endpoint_id)
+			 VALUES ($1, $2, $3, $4, $5, $6::delivery_state, now(), $7)`,
+			did, eid, subID, okey, seq, state, endpointID); err != nil {
+			t.Fatal(err)
+		}
+		if state == "dead_lettered" {
+			if _, err := st.Pool.Exec(ctx,
+				`INSERT INTO dead_letters (delivery_id, final_error, endpoint_id, dead_at)
+				 VALUES ($1, 'permanent', $2, now())`, did, endpointID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return did
+	}
+
+	// Iterate to exercise the race window across interleavings. The fixed code
+	// upholds the invariant deterministically, so this is not flaky.
+	for iter := 0; iter < 40; iter++ {
+		okey := fmt.Sprintf("race%d", iter)
+		did1 := mkDelivery(okey, 1, "dead_lettered")
+		_ = mkDelivery(okey, 2, "pending")
+		if _, err := st.Pool.Exec(ctx,
+			`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count,
+			 blocked_reason, blocked_since, head_delivery_id)
+			 VALUES ($1, $2, 2, 1, 2, 'dead_lettered', now(), $3)`,
+			subID, okey, did1); err != nil {
+			t.Fatal(err)
+		}
+
+		var skipErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, skipErr = st.SkipHead(ctx, did1, "op", "race") }()
+		go func() { defer wg.Done(); _, _, _ = st.ReplayDeadLetter(ctx, did1, time.Hour) }()
+		wg.Wait()
+
+		var state string
+		if err := st.Pool.QueryRow(ctx,
+			`SELECT state FROM deliveries WHERE id=$1`, did1).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+
+		if skipErr == nil {
+			if state != "skipped" {
+				t.Fatalf("iter %d: SkipHead reported success but delivery state=%s (false success — BLOCKER-1)", iter, state)
+			}
+		} else if !errors.Is(skipErr, store.ErrConflict) {
+			t.Fatalf("iter %d: SkipHead err=%v, want nil or ErrConflict", iter, skipErr)
+		}
 	}
 }
