@@ -198,11 +198,13 @@ func (l *Load) Burst(ctx context.Context, n int) (int, error) {
 	return deliveries, nil
 }
 
-// Steady posts at ~rate/s until stop(); stop returns accepted DELIVERIES. Posts that
-// fail (e.g. a paused dependency) are counted as rejected — the oracle's expected is the
-// accepted count, so fail-closed ingress is correct.
-func (l *Load) Steady(ctx context.Context, ratePerSec int) func() int {
-	var deliveries int64
+// Steady posts at ~rate/s until stop(); stop returns (accepted DELIVERIES, total ATTEMPTS).
+// Posts that fail (e.g. a paused dependency) are counted as rejected, not accepted — fail-
+// closed ingress. attempts is every post issued (accepted or not); it is the sound upper
+// bound on how many events could have committed, used by ingress-fault oracles (E2) where a
+// boundary post may time out client-side yet commit server-side on recovery.
+func (l *Load) Steady(ctx context.Context, ratePerSec int) func() (int, int) {
+	var deliveries, attempts int64
 	stopCh := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -215,13 +217,18 @@ func (l *Load) Steady(ctx context.Context, ratePerSec int) func() int {
 			case <-stopCh:
 				return
 			case <-tick.C:
+				atomic.AddInt64(&attempts, 1)
 				if ids, err := l.Post(ctx); err == nil {
 					atomic.AddInt64(&deliveries, int64(len(ids)))
 				}
 			}
 		}
 	}()
-	return func() int { close(stopCh); wg.Wait(); return int(atomic.LoadInt64(&deliveries)) }
+	return func() (int, int) {
+		close(stopCh)
+		wg.Wait()
+		return int(atomic.LoadInt64(&deliveries)), int(atomic.LoadInt64(&attempts))
+	}
 }
 
 // ---- Oracle --------------------------------------------------------------
@@ -237,20 +244,27 @@ type DBState struct{ Total, Succeeded, Pending, InFlight, RetryScheduled, DeadLe
 func (d DBState) NonTerminal() int { return d.Pending + d.InFlight + d.RetryScheduled }
 
 type Snapshot struct {
-	Stats              Stats
-	DB                 DBState
-	ExpectedDeliveries int
-	DupBound           int
+	Stats Stats
+	DB    DBState
+	// Succeeded must land in [ExpectedMin, ExpectedMax]. For a delivery-path fault (E1/E3)
+	// Min==Max==accepted (exact). For an ingress-path fault (E2: paused Postgres) Max admits
+	// the posts in-flight at the boundary that commit on recovery beyond the client-confirmed
+	// accepted count.
+	ExpectedMin int
+	ExpectedMax int
+	DupBound    int
 }
 
-// Recovered: every accepted delivery reached `succeeded`, nothing is non-terminal or
-// unexpectedly dead-lettered/cancelled, the receiver saw every delivery, and duplicates
-// are within the mechanism-derived bound (Codex folds #1,#7,#10).
+// Recovered: everything drained (nothing non-terminal / unexpectedly dead-lettered /
+// cancelled), the count of succeeded deliveries sits within [ExpectedMin, ExpectedMax], the
+// receiver saw exactly the succeeded set (no loss, no phantom), and duplicates are within the
+// mechanism-derived bound (Codex folds #1,#7,#10). distinct==succeeded (not ==expected) so the
+// bounded-Max E2 case stays honest: every succeeded delivery was observed exactly once.
 func (s Snapshot) Recovered() bool {
 	return s.DB.NonTerminal() == 0 &&
 		s.DB.DeadLettered == 0 && s.DB.Cancelled == 0 &&
-		s.DB.Succeeded == s.ExpectedDeliveries &&
-		s.Stats.Distinct == s.ExpectedDeliveries &&
+		s.DB.Succeeded >= s.ExpectedMin && s.DB.Succeeded <= s.ExpectedMax &&
+		s.Stats.Distinct == s.DB.Succeeded &&
 		s.Stats.Duplicates <= s.DupBound
 }
 
@@ -303,22 +317,33 @@ func WaitNonTerminal(ctx context.Context, dsn string, min int, deadline time.Dur
 	return last, fmt.Errorf("non-terminal never reached %d within %s (last=%d)", min, deadline, last.NonTerminal())
 }
 
+// PollRecovered asserts an EXACT succeeded count — every accepted delivery, and only those,
+// must succeed. Delivery-path faults (E1 worker-crash, E3 redis loss) use this: all accepted
+// posts committed to PG before the fault, so succeeded must equal accepted exactly.
 func PollRecovered(ctx context.Context, recvURL, dsn string, expected, dupBound int, deadline time.Duration) (Snapshot, error) {
+	return PollRecoveredBounded(ctx, recvURL, dsn, expected, expected, dupBound, deadline)
+}
+
+// PollRecoveredBounded asserts succeeded lands in [expectedMin, expectedMax]. An ingress-path
+// fault (E2: paused Postgres) lets posts in-flight at the pause boundary commit on unpause and
+// deliver exactly once, so succeeded can exceed the client-confirmed accepted count — bounded
+// above by the number of posts ever attempted (you cannot deliver an event never posted).
+func PollRecoveredBounded(ctx context.Context, recvURL, dsn string, expectedMin, expectedMax, dupBound int, deadline time.Duration) (Snapshot, error) {
 	var last Snapshot
 	until := time.Now().Add(deadline)
 	for time.Now().Before(until) {
 		st, e1 := FetchStats(ctx, recvURL)
 		db, e2 := FetchDB(ctx, dsn)
 		if e1 == nil && e2 == nil {
-			last = Snapshot{Stats: st, DB: db, ExpectedDeliveries: expected, DupBound: dupBound}
+			last = Snapshot{Stats: st, DB: db, ExpectedMin: expectedMin, ExpectedMax: expectedMax, DupBound: dupBound}
 			if last.Recovered() {
 				return last, nil
 			}
 		}
 		time.Sleep(time.Second)
 	}
-	return last, fmt.Errorf("not recovered within %s: nonTerminal=%d succeeded=%d/%d distinct=%d dups=%d (bound %d) deadletter=%d cancelled=%d",
-		deadline, last.DB.NonTerminal(), last.DB.Succeeded, expected, last.Stats.Distinct, last.Stats.Duplicates, dupBound, last.DB.DeadLettered, last.DB.Cancelled)
+	return last, fmt.Errorf("not recovered within %s: nonTerminal=%d succeeded=%d want[%d,%d] distinct=%d dups=%d (bound %d) deadletter=%d cancelled=%d",
+		deadline, last.DB.NonTerminal(), last.DB.Succeeded, expectedMin, expectedMax, last.Stats.Distinct, last.Stats.Duplicates, dupBound, last.DB.DeadLettered, last.DB.Cancelled)
 }
 
 // ---- Prometheus metric reader (proves observable fault effect) -----------
