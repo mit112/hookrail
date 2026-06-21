@@ -6,6 +6,9 @@ import (
 	"context"
 	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/mit112/hookrail/internal/store"
 )
 
 func TestAssignOrderingSeqStrictUnderConcurrency(t *testing.T) {
@@ -50,4 +53,238 @@ func TestAssignOrderingSeqStrictUnderConcurrency(t *testing.T) {
 			t.Fatalf("missing seq %d (gap/dupe)", i)
 		}
 	}
+}
+
+func TestRecomputeCursor(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	keyID, subID := seedOrderedPipeline(t, st, "orders.*")
+
+	// Look up the subscription's endpoint_id
+	var endpointID string
+	if err := st.Pool.QueryRow(ctx, `SELECT endpoint_id FROM subscriptions WHERE id=$1`, subID).Scan(&endpointID); err != nil {
+		t.Fatal(err)
+	}
+
+	insertDelivery := func(tx pgx.Tx, oseq int64, state, payload, okey string) string {
+		t.Helper()
+		eid := store.NewID()
+		_, err := tx.Exec(ctx, `INSERT INTO events (id, producer_key_id, topic, payload, payload_size)
+			VALUES ($1, $2, 'orders.created', $3, $4)`, eid, keyID, []byte(payload), len(payload))
+		if err != nil {
+			t.Fatalf("insert event: %v", err)
+		}
+		did := store.NewID()
+		_, err = tx.Exec(ctx,
+			`INSERT INTO deliveries (id, event_id, subscription_id, ordering_key, ordering_seq, state, next_attempt_at, endpoint_id)
+			 VALUES ($1, $2, $3, $4, $5, $6::delivery_state, now(), $7)`,
+			did, eid, subID, okey, oseq, state, endpointID)
+		if err != nil {
+			t.Fatalf("insert delivery: %v", err)
+		}
+		return did
+	}
+
+	// Seed ordered_key_state for key "k1"
+	_, err := st.Pool.Exec(ctx,
+		`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count)
+		 VALUES ($1, $2, 0, 1, 0)
+		 ON CONFLICT (subscription_id, ordering_key) DO NOTHING`, subID, "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// --- Case (a): one active seq=1 → cursor=1, head set, not blocked ---
+	t.Run("active-head", func(t *testing.T) {
+		tx, err := st.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+		did1 := insertDelivery(tx, 1, "pending", `{"n":1}`, "k1")
+		_, err = tx.Exec(ctx,
+			`UPDATE ordered_key_state SET seq_counter=1 WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecomputeCursor(ctx, tx, subID, "k1"); err != nil {
+			t.Fatal(err)
+		}
+		var cursorSeq int64
+		var headID, blockedReason *string
+		var blockedSince interface{}
+		var backlog int
+		err = tx.QueryRow(ctx,
+			`SELECT cursor_seq, head_delivery_id, blocked_reason, blocked_since, backlog_count
+			 FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1").Scan(&cursorSeq, &headID, &blockedReason, &blockedSince, &backlog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cursorSeq != 1 {
+			t.Errorf("cursor_seq = %d, want 1", cursorSeq)
+		}
+		if headID == nil || *headID != did1 {
+			t.Errorf("head_delivery_id = %v, want %s", headID, did1)
+		}
+		if blockedReason != nil {
+			t.Errorf("blocked_reason = %v, want nil", blockedReason)
+		}
+		if backlog != 1 {
+			t.Errorf("backlog_count = %d, want 1", backlog)
+		}
+	})
+
+	// --- Case (b): seq=1 succeeded only → cursor=2 (sentinel seq_counter+1), head NULL, backlog 0 ---
+	t.Run("drain-to-sentinel", func(t *testing.T) {
+		tx, err := st.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+		insertDelivery(tx, 1, "succeeded", `{"n":1}`, "k1b")
+		_, err = tx.Exec(ctx,
+			`UPDATE ordered_key_state SET seq_counter=1 WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Ensure ordered_key_state row exists for k1b
+		_, err = tx.Exec(ctx,
+			`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count)
+			 VALUES ($1, $2, 1, 1, 0)
+			 ON CONFLICT (subscription_id, ordering_key) DO NOTHING`, subID, "k1b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecomputeCursor(ctx, tx, subID, "k1b"); err != nil {
+			t.Fatal(err)
+		}
+		var cursorSeq int64
+		var headID, blockedReason *string
+		var backlog int
+		err = tx.QueryRow(ctx,
+			`SELECT cursor_seq, head_delivery_id, blocked_reason, backlog_count
+			 FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1b").Scan(&cursorSeq, &headID, &blockedReason, &backlog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cursorSeq != 2 { // seq_counter(1) + 1 = 2
+			t.Errorf("cursor_seq = %d, want 2 (sentinel)", cursorSeq)
+		}
+		if headID != nil {
+			t.Errorf("head_delivery_id = %v, want nil", headID)
+		}
+		if blockedReason != nil {
+			t.Errorf("blocked_reason = %v, want nil", blockedReason)
+		}
+		if backlog != 0 {
+			t.Errorf("backlog_count = %d, want 0", backlog)
+		}
+	})
+
+	// --- Case (c): seq=1 dead_lettered, seq=2 pending → cursor=1, blocked_reason='dead_lettered' ---
+	t.Run("dead-lettered-head-blocks", func(t *testing.T) {
+		tx, err := st.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+		insertDelivery(tx, 1, "dead_lettered", `{"n":1}`, "k1c")
+		insertDelivery(tx, 2, "pending", `{"n":2}`, "k1c")
+		_, err = tx.Exec(ctx,
+			`UPDATE ordered_key_state SET seq_counter=2 WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1c")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count)
+			 VALUES ($1, $2, 2, 1, 0)
+			 ON CONFLICT (subscription_id, ordering_key) DO NOTHING`, subID, "k1c")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecomputeCursor(ctx, tx, subID, "k1c"); err != nil {
+			t.Fatal(err)
+		}
+		var cursorSeq int64
+		var headID, blockedReason *string
+		var blockedSince interface{}
+		var backlog int
+		err = tx.QueryRow(ctx,
+			`SELECT cursor_seq, head_delivery_id, blocked_reason, blocked_since, backlog_count
+			 FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1c").Scan(&cursorSeq, &headID, &blockedReason, &blockedSince, &backlog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cursorSeq != 1 {
+			t.Errorf("cursor_seq = %d, want 1", cursorSeq)
+		}
+		if headID == nil {
+			t.Error("head_delivery_id is nil, want non-nil")
+		}
+		if blockedReason == nil || *blockedReason != "dead_lettered" {
+			t.Errorf("blocked_reason = %v, want 'dead_lettered'", blockedReason)
+		}
+		if blockedSince == nil {
+			t.Error("blocked_since is nil, want non-nil")
+		}
+		if backlog != 2 {
+			t.Errorf("backlog_count = %d, want 2", backlog)
+		}
+	})
+
+	// --- Case (d): seq=1 skipped, seq=2 pending → cursor=2, not blocked ---
+	t.Run("skipped-head-advances", func(t *testing.T) {
+		tx, err := st.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+		did2 := insertDelivery(tx, 2, "pending", `{"n":2}`, "k1d")
+		insertDelivery(tx, 1, "skipped", `{"n":1}`, "k1d")
+		_, err = tx.Exec(ctx,
+			`UPDATE ordered_key_state SET seq_counter=2 WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1d")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count)
+			 VALUES ($1, $2, 2, 1, 0)
+			 ON CONFLICT (subscription_id, ordering_key) DO NOTHING`, subID, "k1d")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecomputeCursor(ctx, tx, subID, "k1d"); err != nil {
+			t.Fatal(err)
+		}
+		var cursorSeq int64
+		var headID, blockedReason *string
+		var backlog int
+		err = tx.QueryRow(ctx,
+			`SELECT cursor_seq, head_delivery_id, blocked_reason, backlog_count
+			 FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key=$2`,
+			subID, "k1d").Scan(&cursorSeq, &headID, &blockedReason, &backlog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cursorSeq != 2 {
+			t.Errorf("cursor_seq = %d, want 2", cursorSeq)
+		}
+		if headID == nil || *headID != did2 {
+			t.Errorf("head_delivery_id = %v, want %s", headID, did2)
+		}
+		if blockedReason != nil {
+			t.Errorf("blocked_reason = %v, want nil", blockedReason)
+		}
+		if backlog != 1 {
+			t.Errorf("backlog_count = %d, want 1", backlog)
+		}
+	})
 }

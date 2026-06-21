@@ -23,3 +23,80 @@ func (s *Store) AssignOrderingSeq(ctx context.Context, tx pgx.Tx, subID, key str
 		RETURNING seq_counter, backlog_count`, subID, key).Scan(&seq, &backlog)
 	return seq, backlog, err
 }
+
+// RecomputeCursor recomputes the ordered_key_state row for a given
+// (subscription, ordering_key). The caller MUST hold the ordered_key_state
+// row FOR UPDATE before calling this. It sets cursor_seq from the
+// Global-Constraints derivation, recomputes backlog_count, and sets
+// head_delivery_id / blocked_reason / blocked_since from the head row.
+func (s *Store) RecomputeCursor(ctx context.Context, tx pgx.Tx, subID, key string) error {
+	// Derivation (Global Constraints verbatim):
+	// cursor_seq = COALESCE(
+	//   (SELECT min(ordering_seq) FROM deliveries
+	//    WHERE subscription_id=$1 AND ordering_key=$2
+	//    AND state <> ALL($3::delivery_state[])),
+	//   seq_counter + 1
+	// )
+	// with $3 = {'succeeded','skipped','cancelled'}
+	//
+	// The ::delivery_state[] cast is REQUIRED — a bare pgx []string
+	// will not compare against the delivery_state enum column.
+	const terminalStates = `{succeeded,skipped,cancelled}`
+
+	_, err := tx.Exec(ctx, `
+		WITH recomputed AS (
+			SELECT
+				COALESCE(
+					(SELECT min(ordering_seq) FROM deliveries
+					 WHERE subscription_id = $1
+					   AND ordering_key    = $2
+					   AND state          <> ALL($3::delivery_state[])),
+					oks.seq_counter + 1
+				) AS new_cursor,
+				COALESCE(
+					(SELECT count(*) FROM deliveries
+					 WHERE subscription_id = $1
+					   AND ordering_key    = $2
+					   AND state          <> ALL($3::delivery_state[])),
+					0
+				)::int AS new_backlog
+			FROM ordered_key_state oks
+			WHERE oks.subscription_id = $1
+			  AND oks.ordering_key    = $2
+		)
+		UPDATE ordered_key_state oks SET
+			cursor_seq    = r.new_cursor,
+			backlog_count = r.new_backlog,
+			head_delivery_id = (
+				SELECT id FROM deliveries
+				WHERE subscription_id = $1
+				  AND ordering_key    = $2
+				  AND ordering_seq    = r.new_cursor
+			),
+			blocked_reason = CASE
+				WHEN EXISTS (
+					SELECT 1 FROM deliveries
+					WHERE subscription_id = $1
+					  AND ordering_key    = $2
+					  AND ordering_seq    = r.new_cursor
+					  AND state           = 'dead_lettered'
+				) THEN 'dead_lettered'
+				ELSE NULL
+			END,
+			blocked_since = CASE
+				WHEN EXISTS (
+					SELECT 1 FROM deliveries
+					WHERE subscription_id = $1
+					  AND ordering_key    = $2
+					  AND ordering_seq    = r.new_cursor
+					  AND state           = 'dead_lettered'
+				) THEN COALESCE(oks.blocked_since, now())
+				ELSE NULL
+			END,
+			updated_at    = now()
+		FROM recomputed r
+		WHERE oks.subscription_id = $1
+		  AND oks.ordering_key    = $2`,
+		subID, key, terminalStates)
+	return err
+}
