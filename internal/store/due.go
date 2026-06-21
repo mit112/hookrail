@@ -14,6 +14,11 @@ func (s *Store) DueDeliveryIDs(ctx context.Context, afterID string, limit int) (
 		WHERE ((state IN ('pending','retry_scheduled') AND next_attempt_at <= now())
 		   OR (state = 'in_flight' AND lease_until < now()))
 		  AND id > $1
+		  AND (ordering_key IS NULL OR EXISTS (
+		      SELECT 1 FROM ordered_key_state oks
+		      WHERE oks.subscription_id = deliveries.subscription_id
+		        AND oks.ordering_key    = deliveries.ordering_key
+		        AND oks.cursor_seq      = deliveries.ordering_seq))
 		ORDER BY id
 		LIMIT $2`, afterID, limit)
 	if err != nil {
