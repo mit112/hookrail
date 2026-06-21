@@ -157,9 +157,26 @@ Full runbook (12 attended steps + residual risks):
 ## Observability
 
 Prometheus (`:9091`) scrapes the api/worker/scheduler; Grafana (`:3000`) has a
-provisioned datasource; the OTel Collector forwards traces to Jaeger (`:16686`).
-Curated dashboards land in Slice D. Details:
+provisioned datasource and two curated boards (`overview`, `resilience`); the OTel
+Collector forwards traces to Jaeger (`:16686`). Details:
 [docs/observability.md](docs/observability.md).
+
+## Resilience
+
+Hookrail's durability guarantees are proven by an infrastructure-chaos suite that
+injects real faults into the compose stack and asserts recovery against an
+out-of-band oracle (the receiver ledger + Postgres + the Prometheus API).
+
+| Experiment | Fault | Guarantee |
+|---|---|---|
+| Worker crash | `docker kill` the worker mid-flight | claim fencing + Redis PEL recovery — no loss |
+| Postgres outage | pause Postgres under load | fail-closed ingress, then drain to zero stranded |
+| Redis queue loss | `FLUSHALL` + restart consumers | Postgres is the source of truth — the PG sweeper republishes |
+
+Run the suite locally with `make chaos` (requires Docker; ~20–30 min). CI runs all
+three experiments on `main`. Validate the dashboards with `make dash-verify`. The
+curated Grafana boards (`overview`, `resilience`) provision automatically with
+`make up` at http://localhost:3000.
 
 ## Security
 
