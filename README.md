@@ -176,7 +176,7 @@ out-of-band oracle (the receiver ledger + Postgres + the Prometheus API).
 Run the suite locally with `make chaos` (requires Docker; ~20–30 min). CI runs all
 three experiments on `main`. Validate the dashboards with `make dash-verify`. The
 curated Grafana boards (`overview`, `resilience`) provision automatically with
-`make up` at http://localhost:3000.
+`make up` at <http://localhost:3000>.
 
 ## Security
 
