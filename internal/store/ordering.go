@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -270,4 +271,60 @@ func (s *Store) SkipHead(ctx context.Context, deliveryID, operator, reason strin
 		return nil, nil
 	}
 	return headID, nil
+}
+
+// BlockedKeyRow is a blocked ordered key surfaced to the admin API.
+type BlockedKeyRow struct {
+	SubscriptionID        string     `json:"subscription_id"`
+	OrderingKey           string     `json:"ordering_key"`
+	HeadDeliveryID        *string    `json:"head_delivery_id"`
+	BlockedSince          *time.Time `json:"blocked_since"`
+	BacklogCount          int        `json:"backlog_count"`
+	OldestSuccessorAgeSec *float64   `json:"oldest_successor_age_sec,omitempty"`
+}
+
+// BlockedKeyFilter controls BlockedKeys pagination.
+type BlockedKeyFilter struct {
+	AfterSubID string // keyset: subscription_id (empty = from start)
+	AfterKey   string // keyset: ordering_key (empty = from start)
+	Limit      int
+}
+
+// BlockedKeys returns keys whose head is dead_lettered (blocked_reason IS NOT NULL),
+// with backlog and successor-age info. Paginated via keyset on (subscription_id, ordering_key).
+func (s *Store) BlockedKeys(ctx context.Context, f BlockedKeyFilter) ([]BlockedKeyRow, error) {
+	const terminalStates = `{succeeded,skipped,cancelled}`
+
+	q := `SELECT oks.subscription_id, oks.ordering_key, oks.head_delivery_id,
+		oks.blocked_since, oks.backlog_count,
+		(SELECT EXTRACT(epoch FROM now() - min(d.created_at))
+		 FROM deliveries d
+		 WHERE d.subscription_id = oks.subscription_id
+		   AND d.ordering_key    = oks.ordering_key
+		   AND d.ordering_seq    > oks.cursor_seq
+		   AND d.state          <> ALL($1::delivery_state[])) AS oldest_successor_age_sec
+	FROM ordered_key_state oks
+	WHERE oks.blocked_reason IS NOT NULL
+	  AND (($2 = '' AND $3 = '')
+	       OR (oks.subscription_id > $2)
+	       OR (oks.subscription_id = $2 AND oks.ordering_key > $3))
+	ORDER BY oks.subscription_id, oks.ordering_key
+	LIMIT $4`
+
+	rows, err := s.Pool.Query(ctx, q, terminalStates, f.AfterSubID, f.AfterKey, f.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []BlockedKeyRow
+	for rows.Next() {
+		var r BlockedKeyRow
+		if err := rows.Scan(&r.SubscriptionID, &r.OrderingKey, &r.HeadDeliveryID,
+			&r.BlockedSince, &r.BacklogCount, &r.OldestSuccessorAgeSec); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

@@ -4,6 +4,7 @@ package store_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -397,5 +398,99 @@ func TestApplyOrderedTerminalConcurrent(t *testing.T) {
 	}
 	if len(heads) > 1 {
 		t.Errorf("divergent heads returned: %v — FOR UPDATE serialization broken", heads)
+	}
+}
+
+func TestBlockedKeys(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	// Set up: subscription with ordered=true
+	keyID, _, err := st.CreateProducerKey(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	epID, _, err := st.CreateEndpoint(ctx, [32]byte{}, "https://example.com/h", "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.CreateSubscriptionFull(ctx, store.SubInput{
+		TopicPattern: "orders.*", EndpointID: epID, MaxAttempts: 3, Ordered: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var subID string
+	if err := st.Pool.QueryRow(ctx, `SELECT id FROM subscriptions LIMIT 1`).Scan(&subID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ingest 2 events for key "k1", 1 for key "k2"
+	var did1 string
+	for _, k := range []string{"k1", "k2"} {
+		for i := 0; i < func() int { if k == "k1" { return 2 } else { return 1 } }(); i++ {
+			res, err := st.IngestEvent(ctx, store.IngestParams{
+				ProducerKeyID: keyID, Topic: "orders.x",
+				Payload: []byte(fmt.Sprintf(`{"k":%q,"i":%d}`, k, i)),
+				OrderingKey: k, OrderedKeyBacklogMax: 10000,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if k == "k1" && did1 == "" {
+				did1 = res.DeliveryIDs[0]
+			}
+		}
+	}
+
+	// Block k1 only: set its head to dead_lettered + blocked_reason
+	if _, err := st.Pool.Exec(ctx, `UPDATE deliveries SET state='dead_lettered', lease_until=NULL WHERE id=$1`, did1); err != nil {
+		t.Fatal(err)
+	}
+	// RecomputeCursor will set blocked_reason='dead_lettered' and head_delivery_id
+	tx, err := st.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx,
+		`SELECT true FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key='k1' FOR UPDATE`,
+		subID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecomputeCursor(ctx, tx, subID, "k1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// BlockedKeys should return only k1
+	rows, err := st.BlockedKeys(ctx, store.BlockedKeyFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d blocked keys, want 1", len(rows))
+	}
+	r := rows[0]
+	if r.SubscriptionID != subID {
+		t.Fatalf("subscription_id = %q, want %q", r.SubscriptionID, subID)
+	}
+	if r.OrderingKey != "k1" {
+		t.Fatalf("ordering_key = %q, want k1", r.OrderingKey)
+	}
+	if r.HeadDeliveryID == nil || *r.HeadDeliveryID != did1 {
+		t.Fatalf("head_delivery_id = %v, want %s", r.HeadDeliveryID, did1)
+	}
+	if r.BlockedSince == nil {
+		t.Fatal("blocked_since nil")
+	}
+	if r.BacklogCount < 1 {
+		t.Fatalf("backlog_count = %d, want >= 1", r.BacklogCount)
+	}
+	if r.OldestSuccessorAgeSec == nil {
+		t.Fatal("oldest_successor_age_sec nil")
 	}
 }
