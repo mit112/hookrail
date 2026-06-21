@@ -54,6 +54,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/dlq/{delivery_id}/replay", s.authAdmin(s.replayDLQ))
 	mux.HandleFunc("GET /v1/deliveries", s.authAdmin(s.listDeliveries))
 	mux.HandleFunc("GET /v1/deliveries/{id}", s.authAdmin(s.getDelivery))
+	mux.HandleFunc("POST /v1/deliveries/{id}/skip", s.authAdmin(s.skipDelivery))
 	// Ops routes — NOT auth-guarded (design §1.1, F17).
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /readyz", s.readyz)

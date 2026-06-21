@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -168,6 +169,9 @@ func (s *Store) SkipHead(ctx context.Context, deliveryID, operator, reason strin
 		`SELECT subscription_id, ordering_key, ordering_seq, state
 		 FROM deliveries WHERE id = $1`, deliveryID).Scan(&subID, &okey, &orderingSeq, &state)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("skip: delivery %s: %w", deliveryID, ErrNotFound)
+		}
 		return nil, fmt.Errorf("skip: lookup delivery: %w", err)
 	}
 	if okey == "" {
