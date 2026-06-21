@@ -18,11 +18,34 @@ type Publisher interface {
 	Publish(ctx context.Context, deliveryID string) error
 }
 
+// Reconciler self-heals the ordered-keys cursor projection and republishes lost
+// heads. Optional on the Sweeper — nil disables the ordered reconcile pass.
+type Reconciler interface {
+	ReconcileOrderedKeys(ctx context.Context, batch int, publish func(context.Context, string) error) (blockedKeys int, totalBacklog int64, err error)
+}
+
 type Sweeper struct {
-	Source    Source
-	Publisher Publisher
-	Interval  time.Duration // 30s in production (§3.3)
-	BatchSize int
+	Source     Source
+	Publisher  Publisher
+	Reconciler Reconciler    // optional: ordered-keys reconcile + gauge emit
+	Interval   time.Duration // 30s in production (§3.3)
+	BatchSize  int
+}
+
+// reconcileOrdered runs one ordered-keys reconcile pass and updates the
+// blocked/backlog gauges (a real metric emit path, §7). Errors are logged and
+// swallowed: the next tick retries, and the due sweep is the delivery backstop.
+func (sw *Sweeper) reconcileOrdered(ctx context.Context) {
+	if sw.Reconciler == nil {
+		return
+	}
+	blocked, backlog, err := sw.Reconciler.ReconcileOrderedKeys(ctx, sw.BatchSize, sw.Publisher.Publish)
+	if err != nil {
+		slog.Warn("ordered reconcile failed", "err", err)
+		return
+	}
+	obs.OrderedKeysBlocked.Set(float64(blocked))
+	obs.OrderedKeyBacklog.Set(float64(backlog))
 }
 
 // RunOnce walks the WHOLE due set in keyset batches and publishes every id —
@@ -61,6 +84,7 @@ func (sw *Sweeper) Run(ctx context.Context) error {
 	if _, err := sw.RunOnce(ctx); err != nil {
 		slog.Error("startup sweep failed", "err", err)
 	}
+	sw.reconcileOrdered(ctx)
 	t := time.NewTicker(sw.Interval)
 	defer t.Stop()
 	for {
@@ -73,6 +97,7 @@ func (sw *Sweeper) Run(ctx context.Context) error {
 			} else if n > 0 {
 				slog.Info("sweep republished", "count", n)
 			}
+			sw.reconcileOrdered(ctx)
 		}
 	}
 }

@@ -64,7 +64,7 @@ func main() {
 		}).ListenAndServe()
 	}()
 
-	sw := &scheduler.Sweeper{Source: s, Publisher: q, Interval: 30 * time.Second, BatchSize: 1000}
+	sw := &scheduler.Sweeper{Source: s, Publisher: q, Reconciler: s, Interval: 30 * time.Second, BatchSize: 1000}
 
 	if cfg.RetentionEnabled {
 		j := &scheduler.Janitor{

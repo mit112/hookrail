@@ -35,4 +35,15 @@ var (
 		[]string{"job"})
 	RetentionTickSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name: "hookrail_retention_tick_seconds", Help: "Wall-clock duration of one retention tick."})
+
+	// Ordered-keys observability (§7). Both gauges are re-derived from
+	// ordered_key_state on every sweeper reconcile tick (a real emit path).
+	OrderedKeysBlocked = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "hookrail_ordered_keys_blocked",
+		Help: "Ordered keys currently blocked on a dead_lettered head (paused FIFO).",
+	})
+	OrderedKeyBacklog = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "hookrail_ordered_key_backlog",
+		Help: "Total non-terminal deliveries across all ordered keys (sum of per-key backlog_count).",
+	})
 )
