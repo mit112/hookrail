@@ -14,17 +14,23 @@ import (
 // ErrIdempotencyConflict: same idempotency key, different body hash → HTTP 409 (§4).
 var ErrIdempotencyConflict = errors.New("store: idempotency key reused with different body")
 
+// ErrBacklogFull: ordered key backlog is at capacity; HTTP 429 (§D8).
+var ErrBacklogFull = errors.New("store: ordered key backlog at capacity")
+
 type IngestParams struct {
-	ProducerKeyID string
-	Topic         string
-	Payload       []byte
-	IdemKey       string        // optional
-	IdemTTL       time.Duration // ignored when IdemKey == ""
+	ProducerKeyID       string
+	Topic               string
+	Payload             []byte
+	IdemKey             string        // optional
+	IdemTTL             time.Duration // ignored when IdemKey == ""
+	OrderingKey         string        // optional per-key FIFO ordering
+	OrderedKeyBacklogMax int          // cap per (subscription, ordering_key)
 }
 
 type IngestResult struct {
 	EventID     string   `json:"event_id"`
 	DeliveryIDs []string `json:"delivery_ids"`
+	PublishableIDs []string `json:"-"` // subset of DeliveryIDs that should be XADD'd (heads or all unordered)
 	Replayed    bool     `json:"-"`
 }
 
@@ -39,6 +45,8 @@ func (s *Store) IngestEvent(ctx context.Context, p IngestParams) (IngestResult, 
 	h.Write([]byte(p.Topic))
 	h.Write([]byte{0})
 	h.Write(p.Payload)
+	h.Write([]byte{0})
+	h.Write([]byte(p.OrderingKey))
 	bodyHash := h.Sum(nil)
 
 	// Fast path: replay/conflict check outside the insert txn.
@@ -65,18 +73,21 @@ func (s *Store) IngestEvent(ctx context.Context, p IngestParams) (IngestResult, 
 	// Topic matching evaluated at ingest (§3.1). Subscription counts are
 	// small in P0; match in Go for clarity.
 	rows, err := tx.Query(ctx,
-		`SELECT s.id, s.topic_pattern, s.endpoint_id
+		`SELECT s.id, s.topic_pattern, s.endpoint_id, s.ordered
 		 FROM subscriptions s
 		 JOIN endpoints e ON e.id = s.endpoint_id
 		 WHERE s.active AND s.deleted_at IS NULL AND e.deleted_at IS NULL`)
 	if err != nil {
 		return IngestResult{}, err
 	}
-	type sub struct{ id, pattern, endpointID string }
+	type sub struct {
+		id, pattern, endpointID string
+		ordered                 bool
+	}
 	var subs []sub
 	for rows.Next() {
 		var x sub
-		if err := rows.Scan(&x.id, &x.pattern, &x.endpointID); err != nil {
+		if err := rows.Scan(&x.id, &x.pattern, &x.endpointID, &x.ordered); err != nil {
 			rows.Close()
 			return IngestResult{}, err
 		}
@@ -85,20 +96,49 @@ func (s *Store) IngestEvent(ctx context.Context, p IngestParams) (IngestResult, 
 	rows.Close()
 
 	var deliveryIDs []string
+	var publishableIDs []string
 	for _, x := range subs {
 		if !MatchTopic(x.pattern, p.Topic) {
 			continue
 		}
 		did := NewID()
+		var orderingKeyArg interface{}
+		var orderingSeqArg interface{}
+		var isHead bool
+		if x.ordered && p.OrderingKey != "" {
+			seq, backlog, err := s.AssignOrderingSeq(ctx, tx, x.id, p.OrderingKey)
+			if err != nil {
+				return IngestResult{}, fmt.Errorf("assign ordering seq: %w", err)
+			}
+			if backlog > p.OrderedKeyBacklogMax {
+				return IngestResult{}, ErrBacklogFull
+			}
+			var cursorSeq int64
+			if err := tx.QueryRow(ctx,
+				`SELECT cursor_seq FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key=$2`,
+				x.id, p.OrderingKey).Scan(&cursorSeq); err != nil {
+				return IngestResult{}, fmt.Errorf("read cursor_seq: %w", err)
+			}
+			orderingKeyArg = p.OrderingKey
+			var s = seq
+			orderingSeqArg = &s
+			isHead = (seq == cursorSeq)
+		} else {
+			isHead = true // unordered deliveries are always published
+		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO deliveries (id, event_id, subscription_id, endpoint_id) VALUES ($1, $2, $3, $4)`,
-			did, eventID, x.id, x.endpointID); err != nil {
+			`INSERT INTO deliveries (id, event_id, subscription_id, endpoint_id, ordering_key, ordering_seq)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			did, eventID, x.id, x.endpointID, orderingKeyArg, orderingSeqArg); err != nil {
 			return IngestResult{}, fmt.Errorf("insert delivery: %w", err)
 		}
 		deliveryIDs = append(deliveryIDs, did)
+		if isHead {
+			publishableIDs = append(publishableIDs, did)
+		}
 	}
 
-	res := IngestResult{EventID: eventID, DeliveryIDs: deliveryIDs}
+	res := IngestResult{EventID: eventID, DeliveryIDs: deliveryIDs, PublishableIDs: publishableIDs}
 
 	if p.IdemKey != "" {
 		snapshot, err := json.Marshal(res)

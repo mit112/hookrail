@@ -31,6 +31,9 @@ type Config struct {
 	RetentionBatch        int           // RETENTION_BATCH, default 5000
 	RetentionTickBudget   time.Duration // RETENTION_TICK_BUDGET, default 60s
 	RetentionEnabled      bool          // RETENTION_ENABLED, default true
+
+	OrderedKeyBacklogMax int // HOOKRAIL_ORDERED_KEY_BACKLOG_MAX, default 10000
+	OrderingKeyMaxLen    int // HOOKRAIL_ORDERING_KEY_MAX_LEN, default 256
 }
 
 func Load() (Config, error) {
@@ -115,6 +118,25 @@ func Load() (Config, error) {
 		}
 	}
 	c.RetentionEnabled = envOr("RETENTION_ENABLED", "true") == "true"
+
+	c.OrderedKeyBacklogMax = 10000
+	if v := os.Getenv("HOOKRAIL_ORDERED_KEY_BACKLOG_MAX"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			perr = fmt.Errorf("HOOKRAIL_ORDERED_KEY_BACKLOG_MAX must be a positive integer")
+		} else {
+			c.OrderedKeyBacklogMax = n
+		}
+	}
+	c.OrderingKeyMaxLen = 256
+	if v := os.Getenv("HOOKRAIL_ORDERING_KEY_MAX_LEN"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			perr = fmt.Errorf("HOOKRAIL_ORDERING_KEY_MAX_LEN must be a positive integer")
+		} else {
+			c.OrderingKeyMaxLen = n
+		}
+	}
 	if perr != nil {
 		return c, perr
 	}

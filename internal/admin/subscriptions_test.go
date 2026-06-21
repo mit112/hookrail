@@ -58,3 +58,27 @@ func TestCreateSubAgainstDeletedEndpointRejected(t *testing.T) {
 		t.Fatalf("create against deleted endpoint = %d, want 409/422", w.Code)
 	}
 }
+
+func TestOrderedSubscriptionImmutable(t *testing.T) {
+	srv, _ := newServer(t)
+	// create endpoint first
+	ew := do(t, srv, "POST", "/v1/endpoints", map[string]string{"url": "https://example.com/h"})
+	var ep struct{ ID string }
+	_ = json.Unmarshal(ew.Body.Bytes(), &ep)
+
+	// create ordered subscription
+	w := do(t, srv, "POST", "/v1/subscriptions", map[string]any{
+		"topic_pattern": "orders.*", "endpoint_id": ep.ID, "max_attempts": 5, "ordered": true,
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create ordered sub = %d body=%s", w.Code, w.Body.String())
+	}
+	var sub struct{ ID string }
+	_ = json.Unmarshal(w.Body.Bytes(), &sub)
+
+	// attempt to set ordered:false → 409 (immutable)
+	p := do(t, srv, "PATCH", "/v1/subscriptions/"+sub.ID, map[string]any{"ordered": false})
+	if p.Code != http.StatusConflict {
+		t.Fatalf("immutable ordered change = %d, want 409", p.Code)
+	}
+}

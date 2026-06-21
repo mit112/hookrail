@@ -19,6 +19,7 @@ type createSubReq struct {
 	MaxAttempts   int             `json:"max_attempts"`
 	RateLimitRPS  *float64        `json:"rate_limit_rps"`
 	BackoffPolicy json.RawMessage `json:"backoff_policy"`
+	Ordered       bool            `json:"ordered"`
 }
 
 // isCheckViolation reports a PG CHECK/constraint failure → HTTP 422.
@@ -45,6 +46,7 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
 	id, err := s.store.CreateSubscriptionFull(r.Context(), store.SubInput{
 		TopicPattern: req.TopicPattern, EndpointID: req.EndpointID,
 		MaxAttempts: req.MaxAttempts, RateLimitRPS: req.RateLimitRPS, BackoffPolicy: req.BackoffPolicy,
+		Ordered: req.Ordered,
 	})
 	switch {
 	case errors.Is(err, store.ErrConflict):
@@ -94,6 +96,7 @@ type patchSubReq struct {
 	MaxAttempts   *int            `json:"max_attempts"`
 	RateLimitRPS  *float64        `json:"rate_limit_rps"`
 	BackoffPolicy json.RawMessage `json:"backoff_policy"`
+	Ordered       *bool           `json:"ordered"`
 }
 
 func (s *Server) patchSubscription(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +109,19 @@ func (s *Server) patchSubscription(w http.ResponseWriter, r *http.Request) {
 	if len(req.BackoffPolicy) > 0 {
 		if err := backoff.Validate(req.BackoffPolicy); err != nil {
 			httpx.Problem(w, http.StatusUnprocessableEntity, "invalid backoff_policy", err.Error())
+			return
+		}
+	}
+	if req.Ordered != nil {
+		current, err := s.store.GetSubscription(r.Context(), id, false)
+		if errors.Is(err, store.ErrNotFound) {
+			// will be handled below by UpdateSubscription
+		} else if err != nil {
+			httpx.Problem(w, http.StatusServiceUnavailable, "update failed", "query error")
+			return
+		} else if current.Ordered != *req.Ordered {
+			httpx.Problem(w, http.StatusConflict, "ordered immutable",
+				"ordered flag cannot be changed after creation")
 			return
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -29,14 +30,16 @@ type Publisher interface {
 }
 
 type Server struct {
-	store   *store.Store
-	queue   Publisher
-	limits  *ratelimit.Registry // per producer key (§10: floods → 429)
-	idemTTL time.Duration
+	store              *store.Store
+	queue              Publisher
+	limits             *ratelimit.Registry // per producer key (§10: floods → 429)
+	idemTTL            time.Duration
+	orderingKeyMaxLen  int
+	orderedKeyBacklogMax int
 }
 
-func New(s *store.Store, q Publisher, limits *ratelimit.Registry, idemTTL time.Duration) *Server {
-	return &Server{store: s, queue: q, limits: limits, idemTTL: idemTTL}
+func New(s *store.Store, q Publisher, limits *ratelimit.Registry, idemTTL time.Duration, orderingKeyMaxLen, orderedKeyBacklogMax int) *Server {
+	return &Server{store: s, queue: q, limits: limits, idemTTL: idemTTL, orderingKeyMaxLen: orderingKeyMaxLen, orderedKeyBacklogMax: orderedKeyBacklogMax}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -87,17 +90,49 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse ordering_key from header or body.
+	var orderingKey string
+	if hk := r.Header.Get("X-Hookrail-Ordering-Key"); hk != "" {
+		orderingKey = hk
+	}
+	var bodyMap map[string]json.RawMessage
+	if err := json.Unmarshal(req.Payload, &bodyMap); err == nil {
+		if raw, ok := bodyMap["ordering_key"]; ok {
+			var bk string
+			if err := json.Unmarshal(raw, &bk); err == nil && bk != "" {
+				if orderingKey != "" && orderingKey != bk {
+					problem(w, http.StatusBadRequest, "ordering_key conflict",
+						"X-Hookrail-Ordering-Key and body.ordering_key differ")
+					return
+				}
+				orderingKey = bk
+			}
+		}
+	}
+	if orderingKey != "" && len(orderingKey) > s.orderingKeyMaxLen {
+		problem(w, http.StatusBadRequest, "ordering_key too long",
+			fmt.Sprintf("ordering_key exceeds %d characters", s.orderingKeyMaxLen))
+		return
+	}
+
 	res, err := s.store.IngestEvent(r.Context(), store.IngestParams{
-		ProducerKeyID: keyID,
-		Topic:         req.Topic,
-		Payload:       req.Payload,
-		IdemKey:       r.Header.Get("Idempotency-Key"),
-		IdemTTL:       s.idemTTL,
+		ProducerKeyID:       keyID,
+		Topic:               req.Topic,
+		Payload:             req.Payload,
+		IdemKey:             r.Header.Get("Idempotency-Key"),
+		IdemTTL:             s.idemTTL,
+		OrderingKey:         orderingKey,
+		OrderedKeyBacklogMax: s.orderedKeyBacklogMax,
 	})
 	switch {
 	case errors.Is(err, store.ErrIdempotencyConflict):
 		obs.IngestEventsTotal.WithLabelValues("conflict").Inc()
 		problem(w, http.StatusConflict, "idempotency conflict", "Idempotency-Key was reused with a different body")
+		return
+	case errors.Is(err, store.ErrBacklogFull):
+		w.Header().Set("Retry-After", "30")
+		problem(w, http.StatusTooManyRequests, "backlog full",
+			"ordered key backlog at capacity; retry later")
 		return
 	case err != nil:
 		// §10: PG down → 503, no silent accept. The 202 promise requires the commit.
@@ -111,7 +146,7 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 	if !res.Replayed {
 		// Best-effort XADD after commit (§3.1): failure only delays delivery
 		// until the next sweep; it never loses it.
-		for _, id := range res.DeliveryIDs {
+		for _, id := range res.PublishableIDs {
 			if err := s.queue.Publish(r.Context(), id); err != nil {
 				slog.Warn("post-commit publish failed; sweeper will repair", "delivery_id", id, "err", err)
 				break

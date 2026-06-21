@@ -108,6 +108,7 @@ type SubInput struct {
 	MaxAttempts   int
 	RateLimitRPS  *float64
 	BackoffPolicy []byte // raw JSONB or nil
+	Ordered       bool
 }
 
 type SubscriptionRow struct {
@@ -119,6 +120,7 @@ type SubscriptionRow struct {
 	BackoffPolicy json.RawMessage `json:"backoff_policy,omitempty"`
 	Active        bool            `json:"active"`
 	DeletedAt     *time.Time      `json:"deleted_at,omitempty"`
+	Ordered       bool            `json:"ordered"`
 }
 
 // CreateSubscriptionFull inserts a subscription against a LIVE endpoint only.
@@ -127,10 +129,10 @@ type SubscriptionRow struct {
 func (s *Store) CreateSubscriptionFull(ctx context.Context, p SubInput) (string, error) {
 	id := NewID()
 	ct, err := s.Pool.Exec(ctx,
-		`INSERT INTO subscriptions (id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy)
-		 SELECT $1, $2, $3, $4, $5, $6
+		`INSERT INTO subscriptions (id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy, ordered)
+		 SELECT $1, $2, $3, $4, $5, $6, $7
 		 WHERE EXISTS (SELECT 1 FROM endpoints WHERE id=$3 AND deleted_at IS NULL)`,
-		id, p.TopicPattern, p.EndpointID, p.MaxAttempts, p.RateLimitRPS, nullJSON(p.BackoffPolicy))
+		id, p.TopicPattern, p.EndpointID, p.MaxAttempts, p.RateLimitRPS, nullJSON(p.BackoffPolicy), p.Ordered)
 	if err != nil {
 		return "", err
 	}
@@ -141,20 +143,20 @@ func (s *Store) CreateSubscriptionFull(ctx context.Context, p SubInput) (string,
 }
 
 func (s *Store) GetSubscription(ctx context.Context, id string, includeDeleted bool) (SubscriptionRow, error) {
-	q := `SELECT id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy, active, deleted_at
+	q := `SELECT id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy, active, deleted_at, ordered
 	      FROM subscriptions WHERE id=$1`
 	if !includeDeleted {
 		q += ` AND deleted_at IS NULL`
 	}
 	var r SubscriptionRow
 	err := s.Pool.QueryRow(ctx, q, id).Scan(&r.ID, &r.TopicPattern, &r.EndpointID, &r.MaxAttempts,
-		&r.RateLimitRPS, &r.BackoffPolicy, &r.Active, &r.DeletedAt)
+		&r.RateLimitRPS, &r.BackoffPolicy, &r.Active, &r.DeletedAt, &r.Ordered)
 	return r, err
 }
 
 func (s *Store) ListSubscriptions(ctx context.Context, endpointID, afterID string, limit int) ([]SubscriptionRow, error) {
 	args := []any{afterID, limit}
-	q := `SELECT id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy, active, deleted_at
+	q := `SELECT id, topic_pattern, endpoint_id, max_attempts, rate_limit_rps, backoff_policy, active, deleted_at, ordered
 	      FROM subscriptions WHERE ($1 = '' OR id < $1) AND deleted_at IS NULL`
 	if endpointID != "" {
 		q += ` AND endpoint_id = $3`
@@ -170,7 +172,7 @@ func (s *Store) ListSubscriptions(ctx context.Context, endpointID, afterID strin
 	for rows.Next() {
 		var r SubscriptionRow
 		if err := rows.Scan(&r.ID, &r.TopicPattern, &r.EndpointID, &r.MaxAttempts,
-			&r.RateLimitRPS, &r.BackoffPolicy, &r.Active, &r.DeletedAt); err != nil {
+			&r.RateLimitRPS, &r.BackoffPolicy, &r.Active, &r.DeletedAt, &r.Ordered); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

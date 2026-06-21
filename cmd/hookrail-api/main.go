@@ -48,7 +48,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(s, q, ratelimit.NewRegistry(500, 1000), cfg.IdemTTL).Handler(),
+		Handler:           api.New(s, q, ratelimit.NewRegistry(500, 1000), cfg.IdemTTL, cfg.OrderingKeyMaxLen, cfg.OrderedKeyBacklogMax).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

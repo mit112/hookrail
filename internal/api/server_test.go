@@ -98,7 +98,7 @@ func newServer(t *testing.T, q api.Publisher) (*httptest.Server, *store.Store, s
 	if _, err := s.CreateSubscription(ctx, "orders.*", epID, 8); err != nil {
 		t.Fatal(err)
 	}
-	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000), 24*time.Hour)
+	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000), 24*time.Hour, 256, 10000)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, s, key
@@ -249,6 +249,24 @@ func TestGetEventStatus(t *testing.T) {
 	}
 	if len(status.Deliveries) != 1 || status.Deliveries[0].State != "pending" {
 		t.Fatalf("status = %+v, want 1 pending delivery", status)
+	}
+}
+
+func TestPostEventOrderingKeyTooLong(t *testing.T) {
+	ts, _, key := newServer(t, &nopQueue{})
+	body := `{"topic":"orders.created","payload":{"n":1}}`
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/events",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hookrail-Ordering-Key", strings.Repeat("x", 257)) // > 256
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for long ordering key", resp.StatusCode)
 	}
 }
 
