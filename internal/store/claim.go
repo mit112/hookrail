@@ -55,6 +55,11 @@ func (s *Store) ClaimDelivery(ctx context.Context, id string, lease time.Duratio
 			WHERE id = $1
 			  AND ((state IN ('pending','retry_scheduled') AND next_attempt_at <= now())
 			       OR (state = 'in_flight' AND lease_until < now()))
+			  AND (deliveries.ordering_key IS NULL OR EXISTS (
+			       SELECT 1 FROM ordered_key_state oks
+			       WHERE oks.subscription_id = deliveries.subscription_id
+			         AND oks.ordering_key    = deliveries.ordering_key
+			         AND oks.cursor_seq      = deliveries.ordering_seq))
 			RETURNING id, event_id, subscription_id, attempt_count, claim_version
 		)
 		SELECT c.id, c.event_id, c.subscription_id, c.attempt_count, c.claim_version,
