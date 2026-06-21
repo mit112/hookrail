@@ -46,7 +46,7 @@ func result(d store.ClaimedDelivery, outcome domain.Outcome, status int, errClas
 func TestAttemptSuccess(t *testing.T) {
 	s := testStore(t)
 	d := claimFresh(t, s)
-	if err := s.CompleteAttempt(context.Background(), result(d, domain.OutcomeSuccess, 200, ""), backoff.Default(), d.MaxAttempts); err != nil {
+	if _, err := s.CompleteAttempt(context.Background(), result(d, domain.OutcomeSuccess, 200, ""), backoff.Default(), d.MaxAttempts); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := deliveryState(t, s, d.ID)
@@ -63,7 +63,7 @@ func TestAttemptSuccess(t *testing.T) {
 func TestAttemptRetryableSchedulesFuture(t *testing.T) {
 	s := testStore(t)
 	d := claimFresh(t, s)
-	if err := s.CompleteAttempt(context.Background(), result(d, domain.OutcomeRetryable, 503, "http_503"), backoff.Default(), d.MaxAttempts); err != nil {
+	if _, err := s.CompleteAttempt(context.Background(), result(d, domain.OutcomeRetryable, 503, "http_503"), backoff.Default(), d.MaxAttempts); err != nil {
 		t.Fatal(err)
 	}
 	st, nextAt := deliveryState(t, s, d.ID)
@@ -80,7 +80,7 @@ func TestAttemptRetryAfterHonored(t *testing.T) {
 	d := claimFresh(t, s)
 	r := result(d, domain.OutcomeRetryable, 429, "http_429")
 	r.RetryAfter = 10 * time.Minute // > attempt-1 jitter ceiling (5s) → wins (§4)
-	if err := s.CompleteAttempt(context.Background(), r, backoff.Default(), d.MaxAttempts); err != nil {
+	if _, err := s.CompleteAttempt(context.Background(), r, backoff.Default(), d.MaxAttempts); err != nil {
 		t.Fatal(err)
 	}
 	_, nextAt := deliveryState(t, s, d.ID)
@@ -92,7 +92,7 @@ func TestAttemptRetryAfterHonored(t *testing.T) {
 func TestAttemptPermanentDeadLetters(t *testing.T) {
 	s := testStore(t)
 	d := claimFresh(t, s)
-	if err := s.CompleteAttempt(context.Background(), result(d, domain.OutcomePermanent, 404, "http_404"), backoff.Default(), d.MaxAttempts); err != nil {
+	if _, err := s.CompleteAttempt(context.Background(), result(d, domain.OutcomePermanent, 404, "http_404"), backoff.Default(), d.MaxAttempts); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := deliveryState(t, s, d.ID)
@@ -119,7 +119,7 @@ func TestAttemptExhaustionDeadLetters(t *testing.T) {
 	}
 	r := result(d, domain.OutcomeRetryable, 500, "http_500")
 	r.AttemptNo = d.MaxAttempts // final attempt failed retryably → DLQ (§6)
-	if err := s.CompleteAttempt(context.Background(), r, backoff.Default(), d.MaxAttempts); err != nil {
+	if _, err := s.CompleteAttempt(context.Background(), r, backoff.Default(), d.MaxAttempts); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := deliveryState(t, s, d.ID)
@@ -138,7 +138,7 @@ func TestStaleCompletionRejected(t *testing.T) {
 		t.Fatalf("takeover: %v %v", ok, err)
 	}
 	// A wakes up with a stale 404 → must be rejected, NOT dead-lettered
-	err = s.CompleteAttempt(context.Background(),
+	_, err = s.CompleteAttempt(context.Background(),
 		result(d, domain.OutcomePermanent, 404, "http_404"), backoff.Default(), d.MaxAttempts)
 	if !errors.Is(err, store.ErrStaleClaim) {
 		t.Fatalf("stale completion: got %v, want ErrStaleClaim", err)
@@ -153,7 +153,7 @@ func TestStaleCompletionRejected(t *testing.T) {
 		t.Fatalf("stale completion recorded %d attempt rows, want 0", n)
 	}
 	// the new owner's real completion still works
-	if err := s.CompleteAttempt(context.Background(),
+	if _, err := s.CompleteAttempt(context.Background(),
 		result(d2, domain.OutcomeSuccess, 200, ""), backoff.Default(), d2.MaxAttempts); err != nil {
 		t.Fatalf("new owner's completion failed: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestReplayDoesNotRecycleFencingTokens(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim 1: %v %v", ok, err)
 	}
-	if err := s.CompleteAttempt(ctx, result(a, domain.OutcomeRetryable, 500, "http_500"),
+	if _, err := s.CompleteAttempt(ctx, result(a, domain.OutcomeRetryable, 500, "http_500"),
 		backoff.Default(), a.MaxAttempts); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestReplayDoesNotRecycleFencingTokens(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim 2: %v %v", ok, err)
 	}
-	if err := s.CompleteAttempt(ctx, result(b, domain.OutcomePermanent, 410, "http_410"),
+	if _, err := s.CompleteAttempt(ctx, result(b, domain.OutcomePermanent, 410, "http_410"),
 		backoff.Default(), b.MaxAttempts); err != nil {
 		t.Fatal(err)
 	}
@@ -204,12 +204,12 @@ func TestReplayDoesNotRecycleFencingTokens(t *testing.T) {
 		t.Fatalf("replayed claim: count=%d version=%d, want 1/3", c.AttemptCount, c.ClaimVersion)
 	}
 	// a stale completion from run 1 cannot clobber run 2 (token 1 ≠ 3)
-	if err := s.CompleteAttempt(ctx, result(a, domain.OutcomeSuccess, 200, ""),
+	if _, err := s.CompleteAttempt(ctx, result(a, domain.OutcomeSuccess, 200, ""),
 		backoff.Default(), a.MaxAttempts); !errors.Is(err, store.ErrStaleClaim) {
 		t.Fatalf("run-1 token accepted after replay: %v", err)
 	}
 	// run 2's attempt_no 1 inserts fine: uniqueness is per claim_version
-	if err := s.CompleteAttempt(ctx, result(c, domain.OutcomeSuccess, 200, ""),
+	if _, err := s.CompleteAttempt(ctx, result(c, domain.OutcomeSuccess, 200, ""),
 		backoff.Default(), c.MaxAttempts); err != nil {
 		t.Fatalf("replayed run completion failed: %v", err)
 	}

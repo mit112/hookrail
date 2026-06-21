@@ -103,9 +103,9 @@ func (s *Store) RecomputeCursor(ctx context.Context, tx pgx.Tx, subID, key strin
 
 // ApplyOrderedTerminal takes a FOR UPDATE lock on the ordered_key_state row
 // FIRST (LOCK ORDER), then recomputes the cursor via RecomputeCursor, and
-// returns the new head delivery id (nil if empty). No-op for ordering_key=="".
-// The caller publishes the returned head to Redis AFTER commit (store never
-// XADDs — BLOCKER-2).
+// returns the new head delivery id (nil if empty or blocked). No-op for
+// ordering_key=="". The caller publishes the returned head to Redis AFTER
+// commit (store never XADDs — BLOCKER-2).
 func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key string) (*string, error) {
 	if key == "" {
 		return nil, nil
@@ -122,11 +122,16 @@ func (s *Store) ApplyOrderedTerminal(ctx context.Context, tx pgx.Tx, subID, key 
 		return nil, err
 	}
 	var headID *string
+	var blockedReason *string
 	if err := tx.QueryRow(ctx,
-		`SELECT head_delivery_id FROM ordered_key_state
+		`SELECT head_delivery_id, blocked_reason FROM ordered_key_state
 		 WHERE subscription_id=$1 AND ordering_key=$2`,
-		subID, key).Scan(&headID); err != nil {
+		subID, key).Scan(&headID, &blockedReason); err != nil {
 		return nil, err
+	}
+	// A blocked key (dead_lettered head) returns nil — nothing to wake.
+	if blockedReason != nil {
+		return nil, nil
 	}
 	return headID, nil
 }

@@ -81,7 +81,7 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 	// un-counts this claim (no HTTP request happened; the attempt history
 	// must never exceed the max_attempts contract).
 	if d.AttemptCount > d.MaxAttempts {
-		if err := w.Store.DeadLetterExhausted(ctx, d.ID, d.ClaimVersion); err != nil && !errors.Is(err, store.ErrStaleClaim) {
+		if _, err := w.Store.DeadLetterExhausted(ctx, d.ID, d.ClaimVersion); err != nil && !errors.Is(err, store.ErrStaleClaim) {
 			slog.Error("dead-letter exhausted failed; lease recovery will retry", "delivery_id", d.ID, "err", err)
 		}
 		return
@@ -175,8 +175,16 @@ func (w *Worker) attempt(ctx context.Context, d store.ClaimedDelivery) (res stor
 
 func (w *Worker) record(ctx context.Context, d store.ClaimedDelivery, res store.AttemptResult) {
 	pol := backoff.FromJSON(d.BackoffPolicy, d.MaxAttempts) // per-delivery (design §4.3); nil → w.Backoff-equivalent default
-	switch err := w.Store.CompleteAttempt(ctx, res, pol, d.MaxAttempts); {
+	nextHead, err := w.Store.CompleteAttempt(ctx, res, pol, d.MaxAttempts)
+	switch {
 	case err == nil:
+		// Publish the next head to Redis AFTER commit (store never XADDs — BLOCKER-2).
+		// The sweeper is the backstop if the publish fails.
+		if nextHead != nil && w.Queue != nil {
+			if perr := w.Queue.Publish(ctx, *nextHead); perr != nil {
+				slog.Warn("publish next ordered head failed; sweeper will repair", "next_head", *nextHead, "err", perr)
+			}
+		}
 	case errors.Is(err, store.ErrStaleClaim):
 		// our lease expired and another worker owns this delivery now —
 		// drop our result; the new owner's completion is authoritative

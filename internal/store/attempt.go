@@ -34,12 +34,31 @@ type AttemptResult struct {
 // without this, a stale 404 could dead-letter a delivery that its new owner
 // is busy delivering successfully. The fence is claim_version, NOT
 // attempt_count: replay resets the count (§6), which would recycle tokens.
-func (s *Store) CompleteAttempt(ctx context.Context, r AttemptResult, pol backoff.Policy, maxAttempts int) error {
+func (s *Store) CompleteAttempt(ctx context.Context, r AttemptResult, pol backoff.Policy, maxAttempts int) (*string, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// LOCK ORDER: look up ordering info and lock ordered_key_state FIRST
+	var subID, orderingKey string
+	err = tx.QueryRow(ctx,
+		`SELECT subscription_id, COALESCE(ordering_key, '') FROM deliveries WHERE id = $1`,
+		r.DeliveryID).Scan(&subID, &orderingKey)
+	if err != nil {
+		return nil, err
+	}
+
+	if orderingKey != "" {
+		// LOCK ORDER: lock ordered_key_state BEFORE touching deliveries
+		var ok bool
+		if err := tx.QueryRow(ctx,
+			`SELECT true FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key=$2 FOR UPDATE`,
+			subID, orderingKey).Scan(&ok); err != nil {
+			return nil, err
+		}
+	}
 
 	// fenced transition FIRST: if the claim is stale, record nothing at all
 	var ct pgconn.CommandTag
@@ -63,10 +82,10 @@ func (s *Store) CompleteAttempt(ctx context.Context, r AttemptResult, pol backof
 			r.DeliveryID, r.ClaimVersion, delay)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrStaleClaim
+		return nil, ErrStaleClaim
 	}
 
 	var httpStatus *int
@@ -84,7 +103,7 @@ func (s *Store) CompleteAttempt(ctx context.Context, r AttemptResult, pol backof
 		 VALUES ($1, $2, $3, $4::attempt_status, $5, $6, NULLIF($7,''), $8, $9)`,
 		r.DeliveryID, r.AttemptNo, r.ClaimVersion, status, httpStatus, r.LatencyMS, r.ErrorClass,
 		r.RequestedAt, r.CompletedAt); err != nil {
-		return fmt.Errorf("insert attempt: %w", err)
+		return nil, fmt.Errorf("insert attempt: %w", err)
 	}
 
 	if r.Outcome == domain.OutcomePermanent ||
@@ -98,10 +117,24 @@ func (s *Store) CompleteAttempt(ctx context.Context, r AttemptResult, pol backof
 			   SET final_error = EXCLUDED.final_error, dead_at = now(), replayed_at = NULL,
 			       endpoint_id = EXCLUDED.endpoint_id`,
 			r.DeliveryID, r.ErrorClass); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return tx.Commit(ctx)
+
+	// For ordered terminal transitions (success or dead_letter), recompute cursor.
+	// Retryables do NOT advance the cursor (the head is still in blocking state).
+	var nextHeadID *string
+	if orderingKey != "" {
+		nextHeadID, err = s.ApplyOrderedTerminal(ctx, tx, subID, orderingKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return nextHeadID, nil
 }
 
 // DeadLetterExhausted dead-letters a delivery whose budget was consumed
@@ -109,22 +142,41 @@ func (s *Store) CompleteAttempt(ctx context.Context, r AttemptResult, pol backof
 // this claim, so NO delivery_attempts row is written, and the bookkeeping
 // claim is un-counted — delivery_attempts never shows more than max_attempts
 // rows (the published attempt contract). Fenced like every transition.
-func (s *Store) DeadLetterExhausted(ctx context.Context, id string, claimVersion int64) error {
+func (s *Store) DeadLetterExhausted(ctx context.Context, id string, claimVersion int64) (*string, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// LOCK ORDER: look up ordering info and lock ordered_key_state FIRST
+	var subID, orderingKey string
+	err = tx.QueryRow(ctx,
+		`SELECT subscription_id, COALESCE(ordering_key, '') FROM deliveries WHERE id = $1`,
+		id).Scan(&subID, &orderingKey)
+	if err != nil {
+		return nil, err
+	}
+
+	if orderingKey != "" {
+		var ok bool
+		if err := tx.QueryRow(ctx,
+			`SELECT true FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key=$2 FOR UPDATE`,
+			subID, orderingKey).Scan(&ok); err != nil {
+			return nil, err
+		}
+	}
+
 	ct, err := tx.Exec(ctx,
 		`UPDATE deliveries SET state='dead_lettered', attempt_count = attempt_count - 1,
 		   lease_until=NULL, updated_at=now()
 		 WHERE id=$1 AND state='in_flight' AND claim_version=$2`,
 		id, claimVersion)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrStaleClaim
+		return nil, ErrStaleClaim
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO dead_letters (delivery_id, final_error, endpoint_id)
@@ -132,7 +184,19 @@ func (s *Store) DeadLetterExhausted(ctx context.Context, id string, claimVersion
 		 ON CONFLICT (delivery_id) DO UPDATE
 		   SET final_error = EXCLUDED.final_error, dead_at = now(), replayed_at = NULL,
 		       endpoint_id = EXCLUDED.endpoint_id`, id); err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Commit(ctx)
+
+	var nextHeadID *string
+	if orderingKey != "" {
+		nextHeadID, err = s.ApplyOrderedTerminal(ctx, tx, subID, orderingKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return nextHeadID, nil
 }

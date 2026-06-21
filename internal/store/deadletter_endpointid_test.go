@@ -21,7 +21,7 @@ func TestDeadLetterCarriesEndpointID(t *testing.T) {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
 	// permanent failure → dead-lettered
-	err = s.CompleteAttempt(ctx, store.AttemptResult{
+	_, err = s.CompleteAttempt(ctx, store.AttemptResult{
 		DeliveryID: d.ID, AttemptNo: d.AttemptCount, ClaimVersion: d.ClaimVersion,
 		Outcome: domain.OutcomePermanent, ErrorClass: "permanent", RequestedAt: time.Now(), CompletedAt: time.Now(),
 	}, backoff.Default(), d.MaxAttempts)
