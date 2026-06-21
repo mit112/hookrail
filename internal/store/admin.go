@@ -283,49 +283,54 @@ func (s *Store) SoftDeleteSubscription(ctx context.Context, id string) error {
 // not "at most one"). Takes a tx so the janitor can run it under an advisory
 // lock (M-A4b); CancelOrphaned wraps it in its own tx for standalone use.
 func cancelOrphanedTx(ctx context.Context, tx pgx.Tx, batch int) (int, error) {
-	ct, err := tx.Exec(ctx,
+	// Cancel a bounded set of orphan rows and RETURN the (subscription, key) of
+	// each row actually cancelled, so we recompute EXACTLY the keys we touched
+	// (BLOCKER-2: a separate DISTINCT...LIMIT re-derivation can exclude the key
+	// just cancelled and leave its cursor parked on a cancelled head forever).
+	type orderedKey struct {
+		subID string
+		key   string
+	}
+	rows, err := tx.Query(ctx,
 		`UPDATE deliveries SET state='cancelled', lease_until=NULL, updated_at=now()
 		 WHERE id IN (
 		   SELECT d.id FROM deliveries d
 		   JOIN subscriptions s ON s.id = d.subscription_id
 		   WHERE s.deleted_at IS NOT NULL AND d.state IN ('pending','retry_scheduled')
-		   LIMIT $1 FOR UPDATE OF d SKIP LOCKED)`, batch)
+		   LIMIT $1 FOR UPDATE OF d SKIP LOCKED)
+		 RETURNING subscription_id, ordering_key`, batch)
 	if err != nil {
 		return 0, err
 	}
-	n := int(ct.RowsAffected())
-	if n == 0 {
-		return 0, nil
-	}
-	// For ordered deliveries affected by the cancel, recompute the cursor.
-	type orderedKey struct {
-		subID string
-		key   string
-	}
+	n := 0
+	seen := make(map[orderedKey]struct{})
 	var orderedKeys []orderedKey
-	rows, err := tx.Query(ctx,
-		`SELECT DISTINCT d.subscription_id, d.ordering_key FROM deliveries d
-		 JOIN subscriptions s ON s.id = d.subscription_id
-		 WHERE s.deleted_at IS NOT NULL
-		   AND d.state = 'cancelled'
-		   AND d.ordering_key IS NOT NULL
-		 ORDER BY d.subscription_id, d.ordering_key
-		 LIMIT $1`, batch)
-	if err != nil {
-		return 0, err
-	}
 	for rows.Next() {
-		var k orderedKey
-		if err := rows.Scan(&k.subID, &k.key); err != nil {
+		n++
+		var subID string
+		var okey *string
+		if err := rows.Scan(&subID, &okey); err != nil {
 			rows.Close()
 			return 0, err
 		}
+		if okey == nil || *okey == "" {
+			continue // unordered delivery — no cursor to recompute
+		}
+		k := orderedKey{subID: subID, key: *okey}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
 		orderedKeys = append(orderedKeys, k)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	if n == 0 {
+		return 0, nil
+	}
+	// For ordered deliveries affected by the cancel, recompute the cursor.
 	for _, k := range orderedKeys {
 		if _, err := ApplyOrderedTerminalTx(ctx, tx, k.subID, k.key); err != nil {
 			return 0, err

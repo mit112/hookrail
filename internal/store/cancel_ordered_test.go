@@ -299,3 +299,101 @@ func TestCancelOrderedSkipsAfterHeadTerminal(t *testing.T) {
 		t.Fatalf("blocked_reason = %v, want nil", blockedReason)
 	}
 }
+
+// TestCancelOrphanedRecomputesJustCancelledKey is the BLOCKER-2 regression guard.
+// cancelOrphanedTx cancels a batch-bounded set of orphan rows, then must recompute
+// EXACTLY the keys it just cancelled. The old code re-derived the keys with a
+// separate `SELECT DISTINCT ... ORDER BY subscription_id, ordering_key LIMIT batch`,
+// so a pre-existing cancelled key sorting earlier ("aaa") could fill the LIMIT and
+// shadow the key actually cancelled this pass ("zzz") — leaving its cursor parked
+// on the now-cancelled head forever. Here batch=1: the only pending orphan is on
+// key "zzz", but "aaa" already has a cancelled row that sorts first.
+func TestCancelOrphanedRecomputesJustCancelledKey(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	keyID, subID := seedOrderedPipeline(t, st, "orders.*")
+
+	var endpointID string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT endpoint_id FROM subscriptions WHERE id=$1`, subID).Scan(&endpointID); err != nil {
+		t.Fatal(err)
+	}
+
+	insertDelivery := func(okey string, seq int64, state string) string {
+		t.Helper()
+		eid := store.NewID()
+		did := store.NewID()
+		if _, err := st.Pool.Exec(ctx,
+			`INSERT INTO events (id, producer_key_id, topic, payload, payload_size)
+			 VALUES ($1, $2, 'orders.created', $3, $4)`, eid, keyID, []byte(`{}`), 2); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Pool.Exec(ctx,
+			`INSERT INTO deliveries (id, event_id, subscription_id, ordering_key, ordering_seq, state, next_attempt_at, endpoint_id)
+			 VALUES ($1, $2, $3, $4, $5, $6::delivery_state, now(), $7)`,
+			did, eid, subID, okey, seq, state, endpointID); err != nil {
+			t.Fatal(err)
+		}
+		return did
+	}
+
+	// Key "aaa": a PRE-EXISTING cancelled row (sorts before "zzz"). Its key_state
+	// is already drained (cursor past the cancelled seq1).
+	insertDelivery("aaa", 1, "cancelled")
+	if _, err := st.Pool.Exec(ctx,
+		`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count)
+		 VALUES ($1, 'aaa', 1, 2, 0)`, subID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Key "zzz": head seq1 PENDING, cursor parked at 1.
+	didZ := insertDelivery("zzz", 1, "pending")
+	if _, err := st.Pool.Exec(ctx,
+		`INSERT INTO ordered_key_state (subscription_id, ordering_key, seq_counter, cursor_seq, backlog_count, head_delivery_id)
+		 VALUES ($1, 'zzz', 1, 1, 1, $2)`, subID, didZ); err != nil {
+		t.Fatal(err)
+	}
+
+	// Soft-delete the subscription directly so its pending deliveries are orphans.
+	// (We exercise the janitor path CancelOrphaned, not SoftDeleteSubscription.)
+	if _, err := st.Pool.Exec(ctx,
+		`UPDATE subscriptions SET deleted_at=now() WHERE id=$1`, subID); err != nil {
+		t.Fatal(err)
+	}
+
+	// One janitor pass, batch=1: cancels the single pending orphan ("zzz" seq1).
+	n, err := st.CancelOrphaned(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("CancelOrphaned cancelled n=%d, want 1", n)
+	}
+
+	// "zzz" head must now be cancelled.
+	var state string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT state FROM deliveries WHERE id=$1`, didZ).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "cancelled" {
+		t.Fatalf("zzz head state = %s, want cancelled", state)
+	}
+
+	// REGRESSION: "zzz" cursor must have advanced past the cancelled head to the
+	// sentinel seq_counter+1 = 2. The old LIMIT-mismatch left it parked at 1.
+	var cursor int64
+	var blockedReason *string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT cursor_seq, blocked_reason FROM ordered_key_state WHERE subscription_id=$1 AND ordering_key='zzz'`,
+		subID).Scan(&cursor, &blockedReason); err != nil {
+		t.Fatal(err)
+	}
+	if cursor != 2 {
+		t.Fatalf("zzz cursor after orphan-cancel = %d, want 2 (just-cancelled key not recomputed — BLOCKER-2)", cursor)
+	}
+	if blockedReason != nil {
+		t.Fatalf("zzz blocked_reason = %v, want nil", blockedReason)
+	}
+}
