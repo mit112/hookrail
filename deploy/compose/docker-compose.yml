@@ -115,6 +115,8 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
     volumes:
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/ds.yaml:ro
+      - ./grafana/provisioning/dashboards/provider.yaml:/etc/grafana/provisioning/dashboards/provider.yaml:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports: ["3000:3000"]
 
   otel-collector:

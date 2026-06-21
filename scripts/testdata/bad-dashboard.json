@@ -1,0 +1,2 @@
+{ "uid": "bad", "panels": [ { "title": "bogus", "datasource": { "type": "prometheus", "uid": "prometheus" },
+  "targets": [ { "expr": "rate(hookrail_nonexistent_total[1m])" } ] } ] }

@@ -1,4 +1,4 @@
-.PHONY: build test itest lint up down seed e2e chaos k8s-e2e
+.PHONY: build test itest lint up down seed e2e chaos dash-verify k8s-e2e
 build: ; go build ./...
 test: ; go test ./... -race -count=1
 itest: ; go test -tags integration ./... -race -count=1
@@ -8,6 +8,7 @@ down: ; docker compose -f deploy/compose/docker-compose.yml down -v
 seed: ; docker compose -f deploy/compose/docker-compose.yml run --rm api hookrail-ctl seed
 e2e: ; go test -tags e2e ./test/e2e -v -count=1
 chaos: ; go test -tags chaos ./test/chaos -v -count=1 -timeout 40m
+dash-verify: ; bash scripts/dash-verify.sh
 
 .PHONY: py-lint py-typecheck py-test py-verify py-build py-e2e
 py-lint: ; cd clients/python && uv run ruff check . && uv run ruff format --check .
