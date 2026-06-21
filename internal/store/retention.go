@@ -53,7 +53,14 @@ func (s *Store) TombstoneEventPayloads(ctx context.Context, age time.Duration, b
 			         OR (d.state = 'dead_lettered' AND EXISTS (
 			               SELECT 1 FROM dead_letters dl
 			               WHERE dl.delivery_id = d.id AND dl.replayed_at IS NULL
-			                 AND dl.dead_at >= now() - $1::interval))))
+			                 AND dl.dead_at >= now() - $1::interval))
+			         -- ordered-keys invariant (N9/§D9): never strip the payload of a
+			         -- delivery that is the dead_lettered HEAD of a still-blocked key —
+			         -- the operator needs it to decide replay vs skip, regardless of age.
+			         OR EXISTS (
+			               SELECT 1 FROM ordered_key_state oks
+			               WHERE oks.head_delivery_id = d.id
+			                 AND oks.blocked_reason IS NOT NULL)))
 			   LIMIT $2 FOR UPDATE SKIP LOCKED)`,
 			age, batch)
 		if err != nil {
