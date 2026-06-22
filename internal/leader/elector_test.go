@@ -144,3 +144,84 @@ func TestElectorFailoverOnBackendKill(t *testing.T) {
 	waitFor(t, 3*time.Second, func() bool { return standbyEl.BackendPID() != 0 && standbyEl.BackendPID() != deadPID })
 	waitFor(t, 3*time.Second, func() bool { return standbyDo.Load() > doBefore })
 }
+
+func TestElectorOnElectedOnce(t *testing.T) {
+	dsn := startPG(t)
+	var electedCount, cycleCount atomic.Int64
+	a := leader.New(dsn, leader.SchedulerLeaderLockKey, 100*time.Millisecond,
+		func(v bool) {
+			if v {
+				electedCount.Add(1)
+			}
+		})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	onElected := func(context.Context) error { return nil }
+	do := func(context.Context) error { cycleCount.Add(1); return nil }
+	go func() { _ = a.Run(ctx, 50*time.Millisecond, onElected, do) }()
+
+	// Wait for several cycles to accumulate, then verify onElected fired exactly once
+	waitFor(t, 2*time.Second, func() bool { return cycleCount.Load() >= 3 })
+	if n := electedCount.Load(); n != 1 {
+		t.Fatalf("onElected should fire exactly once per acquisition, got %d", n)
+	}
+	cancel()
+	time.Sleep(100 * time.Millisecond) // let goroutine exit and release lock
+}
+
+func TestElectorGracefulRelease(t *testing.T) {
+	dsn := startPG(t)
+	var aLeader, bLeader atomic.Bool
+	a := leader.New(dsn, leader.SchedulerLeaderLockKey, 200*time.Millisecond, func(v bool) { aLeader.Store(v) })
+	b := leader.New(dsn, leader.SchedulerLeaderLockKey, 200*time.Millisecond, func(v bool) { bLeader.Store(v) })
+	aCtx, aCancel := context.WithCancel(context.Background())
+	bCtx, bCancel := context.WithCancel(context.Background())
+	noop := func(context.Context) error { return nil }
+	go func() { _ = a.Run(aCtx, 50*time.Millisecond, noop, noop) }()
+	go func() { _ = b.Run(bCtx, 50*time.Millisecond, noop, noop) }()
+
+	// Exactly one becomes leader
+	waitFor(t, 2*time.Second, func() bool { return aLeader.Load() != bLeader.Load() })
+
+	// Cancel the leader's context => graceful release
+	var standbyFlag *atomic.Bool
+	var standbyCancel context.CancelFunc
+	if aLeader.Load() {
+		aCancel()
+		standbyFlag = &bLeader
+		standbyCancel = bCancel
+	} else {
+		bCancel()
+		standbyFlag = &aLeader
+		standbyCancel = aCancel
+	}
+
+	// The standby (still-running ctx) must become leader promptly
+	waitFor(t, 3*time.Second, func() bool { return standbyFlag.Load() })
+
+	// Clean up the standby's goroutine
+	standbyCancel()
+	time.Sleep(100 * time.Millisecond) // let goroutines exit
+}
+
+func TestElectorStartupGuard(t *testing.T) {
+	dsn := startPG(t)
+	a := leader.New(dsn, leader.SchedulerLeaderLockKey, 200*time.Millisecond, func(bool) {})
+	ctx := context.Background()
+
+	// Acquire the lock, then startupGuard must pass (lock is observable on the session).
+	ok, err := a.TryAcquireForTest(ctx)
+	if err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	if err := a.StartupGuardForTest(ctx); err != nil {
+		t.Fatalf("startupGuard must pass when lock is held: %v", err)
+	}
+	a.ReleaseForTest(ctx)
+
+	// When no lock is held, startupGuard must fail (ownership not observable —
+	// simulates what happens when a transaction pooler rotates the backend).
+	if err := a.StartupGuardForTest(ctx); err == nil {
+		t.Fatal("startupGuard must fail when lock is not held on the session")
+	}
+}

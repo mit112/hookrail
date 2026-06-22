@@ -2,6 +2,7 @@ package leader
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,6 +51,21 @@ func (e *Elector) holdsLock(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// startupGuard confirms the advisory lock survives a follow-up statement on the
+// same conn (H9 pooler guard). If a transaction-pooler rotated the backend
+// between pg_try_advisory_lock and this probe, holdsLock returns false and we
+// fail fast so the caller can log and retry.
+func (e *Elector) startupGuard(ctx context.Context) error {
+	held, err := e.holdsLock(ctx)
+	if err != nil {
+		return fmt.Errorf("startup guard: pooler or connection check failed: %w", err)
+	}
+	if !held {
+		return fmt.Errorf("startup guard: advisory lock not observable on session; transaction pooler may have rotated the backend")
+	}
+	return nil
 }
 
 // Run blocks; while leader runs do each tick, stands down on lost ownership, re-elects every interval.
@@ -126,6 +142,15 @@ func (e *Elector) tryAcquire(ctx context.Context) (bool, error) {
 	}
 	e.conn = conn
 	e.pid = conn.PgConn().PID()
+
+	if err := e.startupGuard(ctx); err != nil {
+		_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, e.key)
+		_ = conn.Close(ctx)
+		e.conn = nil
+		e.pid = 0
+		return false, err
+	}
+
 	return true, nil
 }
 
@@ -142,3 +167,4 @@ func (e *Elector) release(ctx context.Context) {
 // test wrappers
 func (e *Elector) TryAcquireForTest(ctx context.Context) (bool, error) { return e.tryAcquire(ctx) }
 func (e *Elector) ReleaseForTest(ctx context.Context)                  { e.release(ctx) }
+func (e *Elector) StartupGuardForTest(ctx context.Context) error       { return e.startupGuard(ctx) }
