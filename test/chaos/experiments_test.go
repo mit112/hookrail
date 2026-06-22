@@ -500,20 +500,21 @@ func TestChaos_E_RL_LimiterFailOpenAndRecover(t *testing.T) {
 		t.Fatalf("cut limiter: %v", err)
 	}
 
-	// Liveness: deliveries must keep flowing while limiter is down.
-	before, err := FetchDB(ctx, dsn)
+	// Liveness: deliveries must keep GENUINELY flowing while the limiter is
+	// down — measured by real delivery_attempts for the seeded endpoint, NOT
+	// deliveries.total (which rises from continuous ingress alone even if every
+	// worker stalled). Fail-open is cap-relaxing, so attempts in the window must
+	// exceed what the global cap by itself would have admitted.
+	const rate = 20.0
+	const windowSec = 5.0
+	cutAttempts, err := countAttemptsInWindow(ctx, sr.EndpointID, 5*time.Second)
 	if err != nil {
-		t.Fatalf("fetch db before cut: %v", err)
+		t.Fatalf("count attempts during cut: %v", err)
 	}
-	time.Sleep(5 * time.Second)
-	after, err := FetchDB(ctx, dsn)
-	if err != nil {
-		t.Fatalf("fetch db after cut: %v", err)
+	if float64(cutAttempts) <= rate*windowSec {
+		t.Fatalf("fail-open liveness: deliveries must continue (cap-relaxing) while limiter is down; got %d attempts in %.0fs, expected > %.0f", cutAttempts, windowSec, rate*windowSec)
 	}
-	if after.Total <= before.Total {
-		t.Fatalf("fail-open liveness: deliveries must continue while limiter is down (before=%d after=%d)", before.Total, after.Total)
-	}
-	t.Logf("fail-open liveness: before=%d after=%d", before.Total, after.Total)
+	t.Logf("fail-open liveness during cut: attempts=%d (> global-cap window %.0f)", cutAttempts, rate*windowSec)
 
 	// Prove mode=failopen is active during the cut.
 	m, err := scrapeRatelimit(ctx)
@@ -548,19 +549,37 @@ func TestChaos_E_RL_LimiterFailOpenAndRecover(t *testing.T) {
 	}
 	t.Logf("recovery: failopen stable at %d", fo1)
 
-	// Cap re-enforced: a fresh saturated window is bounded.
+	// Cap re-enforced: a fresh saturated window must be BOUNDED ABOVE (cap
+	// holds), BOUNDED BELOW (deliveries still flow — not a stalled worker), and
+	// the global limiter must be actively DENYING again (denied(global) grows),
+	// proving the cap is genuinely binding rather than throughput merely being
+	// low. Snapshot the global-denied counter around the window.
+	preDenied, err := scrapeRatelimit(ctx)
+	if err != nil {
+		t.Fatalf("scrape denied before recovery window: %v", err)
+	}
 	admitted, err := countAttemptsInWindow(ctx, sr.EndpointID, 5*time.Second)
 	if err != nil {
 		t.Fatalf("count window: %v", err)
 	}
-	const rate = 20.0
-	const burst = 40.0 // 2*rps
-	const epsilon = 15
-	upper := rate*5 + burst + epsilon
+	postDenied, err := scrapeRatelimit(ctx)
+	if err != nil {
+		t.Fatalf("scrape denied after recovery window: %v", err)
+	}
+	const burst = 40.0      // 2*rps
+	const epsilon = 15      // async metric/attempt accounting slack across 2 workers
+	lower := rate           // >= ~1s of admitted throughput: deliveries still flow
+	upper := rate*windowSec + burst + epsilon
+	if float64(admitted) < lower {
+		t.Fatalf("recovery: delivery path stalled, admitted=%d < lower=%.0f", admitted, lower)
+	}
 	if float64(admitted) > upper {
 		t.Fatalf("cap not re-enforced after recovery: admitted=%d > upper=%.0f", admitted, upper)
 	}
-	t.Logf("cap re-enforced: admitted=%d upper=%.0f", admitted, upper)
+	if postDenied.DeniedGlobal <= preDenied.DeniedGlobal {
+		t.Fatalf("global cap not re-engaged after recovery: denied(global) did not grow (%d -> %d)", preDenied.DeniedGlobal, postDenied.DeniedGlobal)
+	}
+	t.Logf("cap re-enforced: admitted=%d in [%.0f,%.0f]; denied(global) grew %d -> %d", admitted, lower, upper, preDenied.DeniedGlobal, postDenied.DeniedGlobal)
 }
 
 // fetchOrderedStats calls GET /ordered-stats on the test-receiver.
