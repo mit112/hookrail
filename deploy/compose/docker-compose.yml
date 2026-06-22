@@ -44,9 +44,17 @@ services:
       # per-endpoint refresh interval without editing this file.
       HOOKRAIL_GLOBAL_RATELIMIT: ${HOOKRAIL_GLOBAL_RATELIMIT:-}
       HOOKRAIL_LIMITS_REFRESH_INTERVAL: ${HOOKRAIL_LIMITS_REFRESH_INTERVAL:-}
+      HOOKRAIL_RL_REDIS_ADDR: ${HOOKRAIL_RL_REDIS_ADDR:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     depends_on:
       postgres: { condition: service_healthy }
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["toxiproxy-server", "-host=0.0.0.0"]
+    ports: ["8474:8474"]
+    depends_on:
+      redis: { condition: service_healthy }
 
   dashboard-provisioner:
     build: ../..

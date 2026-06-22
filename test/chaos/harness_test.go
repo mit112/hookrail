@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,9 +27,25 @@ const (
 
 // ---- Compose -------------------------------------------------------------
 
-type Compose struct{ File, Project string }
+type StackOption func(*Compose)
 
-func NewCompose() *Compose { return &Compose{File: composeFile, Project: composeProj} }
+func WithEnv(k, v string) StackOption {
+	return func(c *Compose) { c.env[k] = v }
+}
+func WithScale(svc string, n int) StackOption {
+	return func(c *Compose) { c.scale[svc] = n }
+}
+
+type Compose struct {
+	File, Project string
+	env           map[string]string
+	scale         map[string]int
+}
+
+func NewCompose() *Compose {
+	return &Compose{File: composeFile, Project: composeProj,
+		env: map[string]string{}, scale: map[string]int{}}
+}
 
 func (c *Compose) base(args ...string) []string {
 	return append([]string{"compose", "-f", c.File, "-p", c.Project}, args...)
@@ -39,6 +56,9 @@ func (c *Compose) docker(ctx context.Context, args ...string) ([]byte, error) {
 	env := os.Environ()
 	if os.Getenv("HOOKRAIL_MASTER_KEY") == "" {
 		env = append(env, "HOOKRAIL_MASTER_KEY="+defaultMaster)
+	}
+	for k, v := range c.env {
+		env = append(env, k+"="+v)
 	}
 	if v := os.Getenv("BUILDX_CONFIG"); v != "" {
 		env = append(env, "BUILDX_CONFIG="+v)
@@ -54,7 +74,14 @@ func (c *Compose) docker(ctx context.Context, args ...string) ([]byte, error) {
 
 func (c *Compose) Up(ctx context.Context, scale map[string]int) error {
 	args := []string{"up", "-d", "--build"}
-	for svc, count := range scale {
+	merged := map[string]int{}
+	for k, v := range c.scale {
+		merged[k] = v
+	}
+	for k, v := range scale {
+		merged[k] = v
+	}
+	for svc, count := range merged {
 		args = append(args, "--scale", fmt.Sprintf("%s=%d", svc, count))
 	}
 	if b, err := c.docker(ctx, c.base(args...)...); err != nil {
@@ -93,6 +120,62 @@ func (c *Compose) WaitReady(ctx context.Context, url string) error {
 		time.Sleep(time.Second)
 	}
 	return fmt.Errorf("stack not ready at %s after 120s", url)
+}
+
+const toxiproxyURL = "http://localhost:8474" //nolint:unused
+
+// setupLimiterProxy creates a toxiproxy named "redis-rl" that forwards to
+// redis:6379.  Must be called after the stack is up and before the worker
+// starts issuing limiter commands.
+func setupLimiterProxy(ctx context.Context) error { //nolint:unused
+	body := `{"name":"redis-rl","listen":"0.0.0.0:8479","upstream":"redis:6379"}`
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, toxiproxyURL+"/proxies",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("toxiproxy create proxy: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("toxiproxy create proxy: status %d: %s", resp.StatusCode, b)
+	}
+	return nil
+}
+
+// cutLimiter adds a timeout toxic to the redis-rl proxy, causing all limiter
+// EVAL commands to fail while the queue Redis stays healthy.
+func cutLimiter(ctx context.Context) error { //nolint:unused
+	body := `{"name":"rl-cut","type":"timeout","attributes":{"timeout":1}}`
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
+		toxiproxyURL+"/proxies/redis-rl/toxics", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("toxiproxy add toxic: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("toxiproxy add toxic: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// restoreLimiter removes the rl-cut toxic so the limiter connection recovers.
+func restoreLimiter(ctx context.Context) error { //nolint:unused
+	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete,
+		toxiproxyURL+"/proxies/redis-rl/toxics/rl-cut", nil)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("toxiproxy restore: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK &&
+		resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("toxiproxy restore: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // ---- Injector ------------------------------------------------------------
@@ -232,6 +315,21 @@ func SeedOrdered(ctx context.Context, c *Compose, url, topic string) (string, er
 	out, err := c.Run(ctx, "api", "hookrail-ctl", "seed", "-url", url, "-topic", topic, "-ordered")
 	if err != nil {
 		return "", fmt.Errorf("seed ordered: %w\n%s", err, out)
+	}
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "producer_key="); ok {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("no producer_key in seed output:\n%s", out)
+}
+
+func SeedWithRPS(ctx context.Context, c *Compose, rps float64, url, topic string) (string, error) {
+	args := []string{"hookrail-ctl", "seed", "-url", url, "-topic", topic, "-rps", fmt.Sprintf("%.2f", rps)}
+	out, err := c.Run(ctx, "api", args...)
+	if err != nil {
+		return "", fmt.Errorf("seed with rps: %w\n%s", err, out)
 	}
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	for sc.Scan() {

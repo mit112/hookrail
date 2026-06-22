@@ -43,6 +43,9 @@ type Config struct {
 	GlobalRateLimit bool          // HOOKRAIL_GLOBAL_RATELIMIT (default true when RedisAddr != "")
 	RLTimeout       time.Duration // HOOKRAIL_RL_TIMEOUT_MS, default 50ms
 	RLTTLFloor      time.Duration // HOOKRAIL_RL_TTL_FLOOR_S, default 60s
+	// RLRedisAddr is the Redis address for the dedicated rate-limiter client.
+	// Defaults to RedisAddr; set to a toxiproxy host:port for chaos tests.
+	RLRedisAddr string // HOOKRAIL_RL_REDIS_ADDR (default RedisAddr)
 	// LimitsRefreshInterval controls how often the worker re-reads per-endpoint
 	// rate-limit overrides and republishes the global snapshot. Default 15s;
 	// lowered in integration tests so a freshly-seeded override propagates fast.
@@ -190,6 +193,10 @@ func Load() (Config, error) {
 		} else {
 			c.RLTTLFloor = time.Duration(n) * time.Second
 		}
+	}
+	c.RLRedisAddr = c.RedisAddr
+	if v := os.Getenv("HOOKRAIL_RL_REDIS_ADDR"); v != "" {
+		c.RLRedisAddr = v
 	}
 	c.LimitsRefreshInterval = 15 * time.Second
 	if v := os.Getenv("HOOKRAIL_LIMITS_REFRESH_INTERVAL"); v != "" {

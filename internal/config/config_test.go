@@ -112,3 +112,30 @@ func TestGlobalRateLimitOverrides(t *testing.T) {
 		t.Fatalf("RLTTLFloor = %v", c.RLTTLFloor)
 	}
 }
+
+func TestRLRedisAddrDefaultsToRedisAddr(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/db")
+	t.Setenv("REDIS_ADDR", "redis.example.com:6379")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RLRedisAddr != "redis.example.com:6379" {
+		t.Fatalf("default RLRedisAddr = %q, want redis.example.com:6379", cfg.RLRedisAddr)
+	}
+}
+
+func TestRLRedisAddrOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/db")
+	t.Setenv("REDIS_ADDR", "redis.example.com:6379")
+	t.Setenv("HOOKRAIL_RL_REDIS_ADDR", "toxiproxy:8479")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RLRedisAddr != "toxiproxy:8479" {
+		t.Fatalf("RLRedisAddr = %q, want toxiproxy:8479", cfg.RLRedisAddr)
+	}
+}

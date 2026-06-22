@@ -68,15 +68,15 @@ func main() {
 	var rlClient *redis.Client
 	if cfg.GlobalRateLimit {
 		var rlOpts *redis.Options
-		if strings.HasPrefix(cfg.RedisAddr, "redis://") {
+		if strings.HasPrefix(cfg.RLRedisAddr, "redis://") {
 			var err error
-			rlOpts, err = redis.ParseURL(cfg.RedisAddr)
+			rlOpts, err = redis.ParseURL(cfg.RLRedisAddr)
 			if err != nil {
 				slog.Error("limiter redis parse", "err", err)
 				os.Exit(1)
 			}
 		} else {
-			rlOpts = &redis.Options{Addr: cfg.RedisAddr}
+			rlOpts = &redis.Options{Addr: cfg.RLRedisAddr}
 		}
 		rlOpts.PoolSize = 8
 		rlOpts.ReadTimeout = 200 * time.Millisecond

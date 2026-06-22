@@ -23,9 +23,12 @@ const (
 	slowURL    = "http://test-receiver:9090/slow-body" // holds deliveries in-flight ~5s
 )
 
-func setupStack(t *testing.T) (*Compose, *Injector) {
+func setupStack(t *testing.T, opts ...StackOption) (*Compose, *Injector) {
 	t.Helper()
 	c := NewCompose()
+	for _, o := range opts {
+		o(c)
+	}
 	ctx := context.Background()
 	t.Cleanup(func() {
 		if err := c.Down(context.Background()); err != nil {
