@@ -23,5 +23,10 @@ seed() { # seed <url> <topic> → prints producer_key (env comes from the api se
 export E2E_PRODUCER_KEY=$(seed "http://test-receiver:9090/succeed"  "demo.*")
 export E2E_RETRY_KEY=$(seed   "http://test-receiver:9090/fail/2"   "demo-retry.*")
 export E2E_DLQ_KEY=$(seed     "http://test-receiver:9090/redirect" "demo-dlq.*")
+# assign-then-assert: `export VAR=$(...)` would mask a seed failure, silently skipping
+# the ordered e2e. Fail loud instead so the test can never vacuously skip.
+E2E_ORDERED_KEY=$($COMPOSE run --rm api hookrail-ctl seed -url "http://test-receiver:9090/ordered-flap" -topic "demo-ordered.*" -ordered | awk -F= '/^producer_key=/{print $2}')
+test -n "$E2E_ORDERED_KEY" || { echo "FATAL: ordered seed produced no producer_key" >&2; exit 1; }
+export E2E_ORDERED_KEY
 
 go test -tags e2e ./test/e2e -v -count=1
