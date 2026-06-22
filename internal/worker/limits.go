@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/mit112/hookrail/internal/obs"
 	"github.com/mit112/hookrail/internal/ratelimit"
 	"github.com/mit112/hookrail/internal/store"
 )
@@ -22,6 +23,7 @@ type EndpointLimits struct {
 	DefaultRate  float64
 	DefaultBurst float64
 	applied      map[string]struct{} // endpoints currently carrying an override
+	lastSuccess  time.Time           // last successful global snapshot publish, for config-age metric
 }
 
 func (e *EndpointLimits) Run(ctx context.Context) {
@@ -34,6 +36,9 @@ func (e *EndpointLimits) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			_ = e.Refresh(ctx)
+		}
+		if e.Global != nil {
+			obs.RatelimitConfigAge.Set(time.Since(e.lastSuccess).Seconds())
 		}
 	}
 }
@@ -80,6 +85,8 @@ func (e *EndpointLimits) Refresh(ctx context.Context) error {
 		}
 		e.applied = next
 		e.Global.SetSnapshot(m)
+		e.lastSuccess = time.Now()
+		obs.RatelimitConfigAge.Set(0)
 		return nil
 	}
 

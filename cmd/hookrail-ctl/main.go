@@ -126,6 +126,7 @@ func main() {
 	url := fs.String("url", "http://test-receiver:9090/succeed", "endpoint URL to deliver to")
 	topic := fs.String("topic", "demo.*", "subscription topic pattern")
 	ordered := fs.Bool("ordered", false, "create ordered subscription")
+	rps := fs.Float64("rps", 0, "rate_limit_rps for the subscription (0=unlimited)")
 	_ = fs.Parse(os.Args[2:])
 
 	cfg, err := config.Load()
@@ -170,10 +171,15 @@ func main() {
 		slog.Error("create endpoint", "err", err)
 		os.Exit(1)
 	}
+	var rateLimitRPS *float64
+	if *rps > 0 {
+		rateLimitRPS = rps
+	}
 	subID, err := s.CreateSubscriptionFull(ctx, store.SubInput{
 		TopicPattern: *topic,
 		EndpointID:   epID,
 		MaxAttempts:  8,
+		RateLimitRPS: rateLimitRPS,
 		Ordered:      *ordered,
 	})
 	if err != nil {

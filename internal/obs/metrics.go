@@ -56,4 +56,9 @@ var (
 		Name: "hookrail_ratelimit_decisions_total",
 		Help: "Rate-limit decisions at the worker delivery path, by result (allowed|denied) and mode (global|local|failopen).",
 	}, []string{"result", "mode"})
+
+	RatelimitConfigAge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "hookrail_ratelimit_config_age_seconds",
+		Help: "Seconds since the last successful global override refresh.",
+	})
 )
