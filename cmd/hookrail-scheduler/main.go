@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/mit112/hookrail/internal/config"
+	"github.com/mit112/hookrail/internal/leader"
 	"github.com/mit112/hookrail/internal/obs"
 	"github.com/mit112/hookrail/internal/queue"
 	"github.com/mit112/hookrail/internal/scheduler"
@@ -66,6 +67,15 @@ func main() {
 
 	sw := &scheduler.Sweeper{Source: s, Publisher: q, Reconciler: s, Interval: 30 * time.Second, BatchSize: 1000}
 
+	el := leader.New(cfg.DatabaseURL, leader.SchedulerLeaderLockKey, 5*time.Second, func(v bool) {
+		obs.SchedulerIsLeader.Set(map[bool]float64{true: 1, false: 0}[v])
+		if v {
+			slog.Info("became leader")
+		} else {
+			slog.Info("lost leadership")
+		}
+	})
+
 	if cfg.RetentionEnabled {
 		j := &scheduler.Janitor{
 			Store: s, PayloadAge: cfg.EventPayloadRetention, AttemptAge: cfg.AttemptRetention,
@@ -76,8 +86,8 @@ func main() {
 	}
 
 	slog.Info("hookrail-scheduler started", "interval", sw.Interval)
-	if err := sw.Run(ctx); err != nil && ctx.Err() == nil {
-		slog.Error("sweeper exited", "err", err)
+	if err := el.Run(ctx, 30*time.Second, sw.Startup, sw.Cycle); err != nil && ctx.Err() == nil {
+		slog.Error("elector exited", "err", err)
 		os.Exit(1)
 	}
 }
