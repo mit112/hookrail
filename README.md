@@ -9,9 +9,9 @@ guarantees at-least-once delivery to subscribed HTTP endpoints with retries,
 exponential backoff (full jitter + Retry-After), idempotency, HMAC signing,
 dead-letter queues, per-endpoint rate limiting, and full observability.
 
-> **Status:** P0 core + P1 shipped — backend admin surface, Python SDK (on PyPI),
-> admin dashboard, and a single-node k3s deploy. The chaos + curated-Grafana suite
-> (Slice D) is in progress. The service is pre-1.0; no compatibility guarantees yet.
+> **Status:** P0 core + P1 + P2 shipped — backend admin surface, Python SDK (on PyPI),
+> admin dashboard, a single-node k3s deploy, the chaos + curated-Grafana suite (Slice D),
+> and opt-in strict-FIFO per-key ordering (P2). The service is pre-1.0; no compatibility guarantees yet.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ both fire safely: duplicates possible, loss impossible.
 
 At-least-once, not exactly-once — exactly-once over HTTP to arbitrary endpoints is
 impossible. Consumers dedup on the `hookrail-delivery-id` header. No FIFO ordering
-guarantee (documented; opt-in ordered keys is on the roadmap). Single-node
+guarantee for unordered subscriptions. Opt-in strict-FIFO per-key ordering is available (see **Ordered delivery** below). Single-node
 Postgres: zero-loss claims hold while PG storage is intact (failure scope
 enumerated in the design doc).
 
@@ -62,7 +62,7 @@ curl -X POST localhost:8080/v1/events \
 ```
 
 Observability ships with the stack: Grafana at `:3000` (datasource provisioned;
-curated dashboards land in Slice D) · Jaeger at `:16686` · Prometheus at `:9091`.
+curated dashboards in Slice D) · Jaeger at `:16686` · Prometheus at `:9091`.
 See [docs/observability.md](docs/observability.md).
 
 ## Producer SDK (Python)
@@ -127,6 +127,8 @@ use RFC 7807 `application/problem+json`.
 | GET | `/v1/deliveries/{id}` | Delivery timeline with attempt list |
 | GET | `/v1/dlq` | Browse dead letters (endpoint-scoped) |
 | POST | `/v1/dlq/{delivery_id}/replay` | Replay dead letter (atomic CAS, tombstone-checked) |
+| POST | `/v1/deliveries/{id}/skip` | Skip a blocked ordered head → cursor advances |
+| GET | `/v1/ordered-keys` | List blocked ordered keys (keyset-paginated; `?blocked=true`) |
 
 A retention janitor runs inside `hookrail-scheduler` (one-shot variant:
 `hookrail-ctl retention --once`). It purges idempotency keys, tombstones old event
@@ -143,6 +145,37 @@ time.
 | `RETENTION_IDEM_HOURS` | `24h` | TTL for idempotency keys before purge |
 | `RETENTION_STREAM_MAXLEN` | `100000` | Approx max Redis stream length (trim cap) |
 | `RETENTION_ENABLED` | `true` | Set to `false` to disable the janitor |
+
+## Ordered delivery (P2)
+
+Subscriptions can opt into **strict-FIFO per-key ordering** by setting `"ordered": true`
+at creation time (immutable after creation). Producers supply an `ordering_key` via the
+`X-Hookrail-Ordering-Key` header or an `ordering_key` field inside the `payload` object
+(conflicting values → 400). The key is an opaque string up to `HOOKRAIL_ORDERING_KEY_MAX_LEN` characters
+(default 256).
+
+**Guarantee:** at most one delivery per `(subscription, ordering_key)` is in-flight at a
+time. The head of each key advances only when the current delivery reaches a terminal
+state (`succeeded`, `skipped`, or `cancelled`).
+
+**Pause on dead-letter:** when the head dead-letters, the entire key blocks — no
+successor is dispatched until an operator replays the dead-letter (existing
+`POST /v1/dlq/{delivery_id}/replay`) or skips it via `POST /v1/deliveries/{id}/skip`.
+
+**Backlog cap:** per-key, up to `HOOKRAIL_ORDERED_KEY_BACKLOG_MAX` (default 10000)
+pending deliveries. The cap+1-th POST returns `429 Too Many Requests` with a
+`Retry-After` header. Unordered traffic is unaffected.
+
+**Visibility:** `GET /v1/ordered-keys?blocked=true` lists every blocked key with its
+head delivery id, block duration, backlog count, and oldest successor age.
+
+| Env | Default | Description |
+|-----|---------|-------------|
+| `HOOKRAIL_ORDERING_KEY_MAX_LEN` | `256` | Max length of an ordering key |
+| `HOOKRAIL_ORDERED_KEY_BACKLOG_MAX` | `10000` | Max pending deliveries per ordered key |
+
+The unordered delivery path is unchanged — a delivery with no `ordering_key` behaves
+exactly as before.
 
 ## Deploy to k3s
 
@@ -245,9 +278,8 @@ See [docs/baseline/](docs/baseline/) — k6 protocol, hardware, and the numbers 
 - **P0** ✓ — durable ingest, delivery state machine, SSRF-guarded signed delivery,
   backoff, DLQ, measured baseline.
 - **P1** — Slice A (admin surface) ✓ · Slice B (Python SDK, PyPI) ✓ · Slice C
-  (dashboard) ✓ · Slice E (k3s deploy + ops-hardening) ✓ · Slice F (docs v2) ✓.
-- **Next** — Slice D: chaos suite + curated Grafana dashboards (independent of the
-  A→C→E→F critical path).
+  (dashboard) ✓ · Slice D (chaos suite + Grafana dashboards) ✓ · Slice E (k3s deploy + ops-hardening) ✓ · Slice F (docs v2) ✓.
+- **P2** ✓ — opt-in strict-FIFO per-key ordering with pause-on-dead-letter, skip, backlog cap, and chaos-proven zero-reorder.
 
 Versioning: the Python SDK follows SemVer (`hookrail` 0.1.0). The service itself is
 pre-1.0 with no compatibility guarantees yet.

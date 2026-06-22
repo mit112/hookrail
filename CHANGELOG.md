@@ -4,6 +4,19 @@ All notable changes documented here. Honest history — early entries include de
 
 ## [Unreleased]
 
+## [P2]
+
+Opt-in strict-FIFO per-key ordering with pause-on-dead-letter, skip, backlog cap, and chaos-proven zero-reorder oracle.
+
+- **Ordered subscriptions:** `"ordered": true` at creation time (immutable). Producers supply an `ordering_key` via `X-Hookrail-Ordering-Key` header or body field.
+- **Per-key serialization:** `ordered_key_state` cursor table with row-level locking; at most one in-flight per key.
+- **Pause on dead-letter:** a dead-lettered head blocks the entire key until replay or skip.
+- **`POST /v1/deliveries/{id}/skip`:** admin action to advance past a blocked head (sets `skipped` state).
+- **`GET /v1/ordered-keys?blocked=true`:** list blocked keys with backlog and successor age.
+- **Backlog cap:** `HOOKRAIL_ORDERED_KEY_BACKLOG_MAX` (default 10000) per key; 429 + `Retry-After` when exceeded.
+- **Chaos-proven:** zero-reorder oracle (E5) under worker kill — 3× deterministic passes.
+- Unordered delivery path is unchanged.
+
 ## [P1]
 
 Backend product surface, a published SDK, an admin dashboard, and a deployable

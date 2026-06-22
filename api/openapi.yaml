@@ -16,6 +16,11 @@ paths:
           name: Idempotency-Key
           schema: { type: string }
           required: false
+        - in: header
+          name: X-Hookrail-Ordering-Key
+          schema: { type: string }
+          required: false
+          description: "alternative to payload.ordering_key; conflict → 400"
       requestBody:
         required: true
         content:
@@ -25,7 +30,7 @@ paths:
               required: [topic, payload]
               properties:
                 topic: { type: string, example: orders.created }
-                payload: { type: object, description: "max 256KB" }
+                payload: { type: object, description: "max 256KB; set \"ordering_key\": string inside the payload to opt into FIFO ordering (or send the X-Hookrail-Ordering-Key header)" }
       responses:
         "202":
           description: Durably recorded (PG commit). Delivery is asynchronous.
@@ -63,7 +68,7 @@ paths:
                       type: object
                       properties:
                         delivery_id: { type: string }
-                        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled] }
+                        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled, skipped] }
                         attempts: { type: array, items: { type: object } }
         "404": { $ref: "#/components/responses/Problem" }
 
@@ -205,6 +210,7 @@ paths:
                 max_attempts: { type: integer }
                 rate_limit_rps: { type: number, nullable: true }
                 backoff_policy: { type: object, nullable: true }
+                ordered: { type: boolean, description: "opt into strict-FIFO per-key ordering; immutable after creation" }
       responses:
         "201":
           description: Created
@@ -332,6 +338,24 @@ paths:
         "409": { $ref: "#/components/responses/Problem" }
         "410": { $ref: "#/components/responses/Problem" }
 
+  /v1/deliveries/{id}/skip:
+    post:
+      summary: Skip a blocked ordered head (advances cursor)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Skipped; new head returned (nil if drained)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skipped"
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /v1/deliveries:
     get:
       summary: List deliveries (keyset-paginated)
@@ -375,6 +399,31 @@ paths:
                 $ref: "#/components/schemas/DeliveryTimeline"
         "404": { $ref: "#/components/responses/Problem" }
 
+  /v1/ordered-keys:
+    get:
+      summary: List blocked ordered keys
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: query, name: blocked, schema: { type: string }, required: true, description: "must be 'true'" }
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: Paginated list of blocked ordered keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OrderedKeyBlocked"
+                  next_cursor: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     producerKey: { type: http, scheme: bearer }
@@ -402,7 +451,7 @@ components:
       properties: { secret: { type: string } }
     Subscription:
       type: object
-      required: [id, topic_pattern, endpoint_id, max_attempts, active]
+      required: [id, topic_pattern, endpoint_id, max_attempts, active, ordered]
       properties:
         id: { type: string }
         topic_pattern: { type: string }
@@ -411,6 +460,7 @@ components:
         rate_limit_rps: { type: number, nullable: true }
         backoff_policy: { type: object, nullable: true }
         active: { type: boolean }
+        ordered: { type: boolean, description: "immutable after creation; enables strict-FIFO per-key ordering" }
         deleted_at: { type: string, format: date-time, nullable: true }
     IDCreated:
       type: object
@@ -436,15 +486,32 @@ components:
         id: { type: string }
         event_id: { type: string }
         endpoint_id: { type: string }
-        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled] }
+        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled, skipped] }
     DeliveryTimeline:
       type: object
       required: [delivery_id, state, attempts_truncated, attempts]
       properties:
         delivery_id: { type: string }
-        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled] }
+        state: { type: string, enum: [pending, in_flight, retry_scheduled, succeeded, dead_lettered, cancelled, skipped] }
         attempts_truncated: { type: boolean }
         attempts: { type: array, items: { type: object } }
+    Skipped:
+      type: object
+      required: [delivery_id, state]
+      properties:
+        delivery_id: { type: string }
+        state: { type: string, enum: [skipped] }
+        next_head_delivery_id: { type: string, nullable: true }
+    OrderedKeyBlocked:
+      type: object
+      required: [subscription_id, ordering_key, backlog_count]
+      properties:
+        subscription_id: { type: string }
+        ordering_key: { type: string }
+        head_delivery_id: { type: string, nullable: true }
+        blocked_since: { type: string, format: date-time, nullable: true }
+        backlog_count: { type: integer }
+        oldest_successor_age_sec: { type: number, nullable: true }
   responses:
     Problem:
       description: RFC 7807 problem
