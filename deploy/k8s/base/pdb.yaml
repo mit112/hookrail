@@ -1,0 +1,65 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: hookrail
+  labels:
+    app: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: worker
+  namespace: hookrail
+  labels:
+    app: worker
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: scheduler
+  namespace: hookrail
+  labels:
+    app: scheduler
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: scheduler
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: admin
+  namespace: hookrail
+  labels:
+    app: admin
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: admin
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard
+  namespace: hookrail
+  labels:
+    app: dashboard
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: dashboard
