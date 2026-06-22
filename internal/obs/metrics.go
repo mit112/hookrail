@@ -30,6 +30,11 @@ var (
 		Help: "Deliveries republished by the PG sweeper (due + stuck).",
 	})
 
+	SchedulerIsLeader = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "hookrail_scheduler_is_leader",
+		Help: "Whether this scheduler instance is the leader (1 = leader, 0 = standby).",
+	})
+
 	RetentionRowsPruned = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "hookrail_retention_rows_pruned_total", Help: "Rows pruned by the retention janitor, by job."},
 		[]string{"job"})
