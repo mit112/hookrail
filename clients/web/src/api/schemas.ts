@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const DeliveryState = z.enum([
-  "pending", "in_flight", "retry_scheduled", "succeeded", "dead_lettered", "cancelled",
+  "pending", "in_flight", "retry_scheduled", "succeeded", "dead_lettered", "cancelled", "skipped",
 ]);
 
 export const EndpointRow = z.object({
