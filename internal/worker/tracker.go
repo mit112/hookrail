@@ -73,18 +73,25 @@ func (t *InFlight) Remove(id string) {
 }
 
 // DrainSnapshot blocks until inProgress == 0, then returns a stable copy
-// of all held deliveries. If the context is canceled, it Broadasts the
-// cond to unblock Wait and returns the current partial snapshot.
+// of all held deliveries. If the context is canceled, it broadcasts the
+// cond to unblock Wait and returns the current partial snapshot. Any claim
+// still in progress when the deadline fires is not yet in the held map (no
+// id/claim_version exists until Finalize) and falls back to lease recovery
+// on the survivor — the deadline should exceed a normal ClaimDelivery.
 func (t *InFlight) DrainSnapshot(ctx context.Context) []Held {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// If the context supports cancellation, ensure cond.Wait unblocks
-	// when it fires so we can return promptly.
+	// If the context supports cancellation, ensure cond.Wait unblocks when it
+	// fires so we can return promptly. Broadcast UNDER the lock: a bare
+	// Broadcast can be lost between the `for inProgress > 0` check and Wait,
+	// leaving the drain blocked past its deadline (Codex M3 pre-gate MAJOR-2).
 	if ctx.Done() != nil {
 		go func() {
 			<-ctx.Done()
+			t.mu.Lock()
 			t.cond.Broadcast()
+			t.mu.Unlock()
 		}()
 	}
 

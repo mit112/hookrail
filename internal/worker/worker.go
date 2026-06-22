@@ -57,6 +57,15 @@ func (w *Worker) Run(intakeCtx, workCtx context.Context) error {
 			msgs, _ = w.Queue.Autoclaim(intakeCtx, w.Consumer, w.Lease, 16)
 		}
 		for _, m := range msgs {
+			// On SIGTERM stop claiming NEW buffered work immediately: any
+			// already-read-but-unprocessed messages stay in this consumer's
+			// PEL and are recovered by a survivor's Autoclaim. This bounds the
+			// post-SIGTERM work to at most the one Process already in flight per
+			// worker, so wg.Wait() returns promptly and drain runs well within
+			// the termination grace period (Codex M3 pre-gate BLOCKER-1).
+			if intakeCtx.Err() != nil {
+				break
+			}
 			w.Process(workCtx, m.DeliveryID)
 			if err := w.Queue.Ack(intakeCtx, m.ID); err != nil {
 				slog.Warn("ack failed", "msg", m.ID, "err", err)
@@ -117,9 +126,14 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 	if !w.Limits.Allow(d.EndpointID, time.Now()) {
 		if err := w.Store.ReleaseClaim(ctx, d.ID, d.ClaimVersion, time.Second); err != nil {
 			slog.Warn("release after rate limit failed", "delivery_id", d.ID, "err", err)
+			// release failed → the row may still be in_flight under our claim;
+			// leave it in the tracker so drain releases it.
+		} else if w.InFlight != nil {
+			// ReleaseClaim moved the row to retry_scheduled — it is no longer
+			// our in-flight claim, so Remove it. Leaving it would leak entries
+			// under sustained rate limiting (Codex M3 pre-gate MAJOR-3).
+			w.InFlight.Remove(d.ID)
 		}
-		// Rate-limit release is not a terminal write; do NOT Remove.
-		// Drain's ReleaseClaimForDrain WHERE state='in_flight' is a safe no-op.
 		return
 	}
 
