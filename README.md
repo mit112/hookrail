@@ -231,11 +231,11 @@ replicas for zero-downtime deploys and single-replica failure tolerance.
   independently by each worker replica. With N workers the effective rate can
   reach N × `rate_limit_rps`. True global (distributed) rate limiting is
   deferred.
-- **Datastore and Cloudflare Tunnel remain single-instance.** Postgres and Redis
-  each run at `replicas: 1` — data-tier HA is out of scope for this release. The
-  Cloudflare Tunnel (`cloudflared`) is bumped to 2 replicas in the prod overlay
-  but the live cutover remains an attended procedure. Multi-node k3s and
-  datastore HA are deferred to a future slice.
+- **Datastore remains single-instance; tunnel cutover stays attended.** Postgres
+  and Redis each run at `replicas: 1` — data-tier HA is out of scope for this
+  release. The Cloudflare Tunnel (`cloudflared`) is bumped to 2 replicas in the
+  prod overlay, but the live cutover remains an attended procedure. Multi-node k3s
+  and datastore HA are deferred to a future slice.
 
 Operational notes (PgBouncer incompatibility, drain timeout, rate-limit
 disclosure): see [docs/deploy/k3s.md](docs/deploy/k3s.md).
@@ -259,8 +259,9 @@ These are documented design trade-offs, not bugs.
 
 - **`rate_limit_rps` is per-worker best-effort.** Each worker independently applies
   the MIN per-endpoint `rate_limit_rps` to its own limiter. With N workers the
-  effective rate can be up to N × `rate_limit_rps`; true global rate limiting is
-  P2. The burst is floored at 1, so even sub-0.5 rps values eventually deliver.
+  effective rate can be up to N × `rate_limit_rps`; true global (distributed) rate
+  limiting is deferred. The burst is floored at 1, so even sub-0.5 rps values
+  eventually deliver.
 - **Secret rotation & URL cutover is eventual.** After `rotate-secret`, the old
   secret stays valid until every in-flight attempt completes or times out. The new
   secret is returned once and never stored in plaintext.

@@ -134,33 +134,81 @@ func (i *Injector) Unpause(ctx context.Context, svc string) error {
 }
 func (i *Injector) Start(ctx context.Context, svc string) error { return i.compose(ctx, "start", svc) }
 
-// KillLeader finds the scheduler container reporting hookrail_scheduler_is_leader 1
-// by scraping /metrics inside each container (port 8083 is NOT exposed on the host),
-// then SIGKILLs exactly that container.
-func (i *Injector) KillLeader(ctx context.Context) error {
-	// Get all scheduler container IDs.
+// schedulerLeaders returns the ids of scheduler containers currently reporting
+// hookrail_scheduler_is_leader 1, scraped DIRECTLY from each container's
+// /metrics (port 8083 is not exposed on the host, and aggregate Prometheus
+// can't attribute the gauge to a specific container or may serve a stale
+// killed-leader sample). A dead/killed container's `exec` fails and is skipped,
+// so it never counts as a leader.
+func (i *Injector) schedulerLeaders(ctx context.Context) ([]string, error) {
 	out, err := i.C.docker(ctx, i.C.base("ps", "-q", "scheduler")...)
 	if err != nil {
-		return fmt.Errorf("ps scheduler: %w\n%s", err, out)
+		return nil, fmt.Errorf("ps scheduler: %w\n%s", err, out)
 	}
 	ids := strings.Fields(string(out))
 	if len(ids) == 0 {
-		return fmt.Errorf("no scheduler containers found")
+		return nil, fmt.Errorf("no scheduler containers found")
 	}
+	var leaders []string
 	for _, id := range ids {
 		metrics, err := i.C.docker(ctx, "exec", id, "wget", "-qO-", "http://localhost:8083/metrics")
 		if err != nil {
-			continue // container may be transient; try next
+			continue // container down/transient — not a live leader
 		}
 		if strings.Contains(string(metrics), "hookrail_scheduler_is_leader 1") {
-			_, err := i.C.docker(ctx, "kill", id)
-			if err != nil {
-				return fmt.Errorf("kill leader container %s: %w", id, err)
-			}
-			return nil
+			leaders = append(leaders, id)
 		}
 	}
-	return fmt.Errorf("no scheduler container reporting leader found among %d containers", len(ids))
+	return leaders, nil
+}
+
+// KillLeader SIGKILLs the single scheduler container reporting leader and returns
+// its id. It FAILS LOUDLY on split brain (>1 leader) or no leader (0) — both are
+// HA-invariant violations that an oracle must not silently pass.
+func (i *Injector) KillLeader(ctx context.Context) (string, error) {
+	leaders, err := i.schedulerLeaders(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(leaders) != 1 {
+		return "", fmt.Errorf("expected exactly 1 scheduler leader, found %d (split brain or none)", len(leaders))
+	}
+	id := leaders[0]
+	if _, err := i.C.docker(ctx, "kill", id); err != nil {
+		return "", fmt.Errorf("kill leader container %s: %w", id, err)
+	}
+	return id, nil
+}
+
+// WaitNewLeader polls until exactly one scheduler container OTHER THAN killedID
+// reports leader (scraped directly), proving a real promotion of a SURVIVOR — not
+// a stale gauge from the killed leader. Fails on split brain among survivors.
+func (i *Injector) WaitNewLeader(ctx context.Context, killedID string, deadline time.Duration) (string, error) {
+	until := time.Now().Add(deadline)
+	var lastErr string
+	for time.Now().Before(until) {
+		leaders, err := i.schedulerLeaders(ctx)
+		if err == nil {
+			var survivors []string
+			for _, id := range leaders {
+				if id != killedID {
+					survivors = append(survivors, id)
+				}
+			}
+			switch len(survivors) {
+			case 1:
+				return survivors[0], nil
+			case 0:
+				lastErr = "no survivor reports leader yet"
+			default:
+				return "", fmt.Errorf("split brain: %d survivor schedulers report leader", len(survivors))
+			}
+		} else {
+			lastErr = err.Error()
+		}
+		time.Sleep(time.Second)
+	}
+	return "", fmt.Errorf("no surviving scheduler became leader within %s (%s)", deadline, lastErr)
 }
 
 // ---- Load driver ---------------------------------------------------------
@@ -483,43 +531,4 @@ func WaitCounterAbove(ctx context.Context, promURL, query string, base float64, 
 		time.Sleep(time.Second)
 	}
 	return last, fmt.Errorf("counter %q never rose above %v within %s (last=%v)", query, base, deadline, last)
-}
-
-// CountDue returns the number of deliveries matching the DueDeliveryIDs predicate —
-// the exact set the sweeper would republish on its next pass.
-func CountDue(ctx context.Context, dsn string) (int, error) {
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = conn.Close(ctx) }()
-	var count int
-	err = conn.QueryRow(ctx, `
-		SELECT count(*) FROM deliveries
-		WHERE ((state IN ('pending','retry_scheduled') AND next_attempt_at <= now())
-		   OR (state = 'in_flight' AND lease_until < now()))
-		  AND (ordering_key IS NULL OR EXISTS (
-		      SELECT 1 FROM ordered_key_state oks
-		      WHERE oks.subscription_id = deliveries.subscription_id
-		        AND oks.ordering_key    = deliveries.ordering_key
-		        AND oks.cursor_seq      = deliveries.ordering_seq))
-	`).Scan(&count)
-	return count, err
-}
-
-// WaitDue polls until at least min deliveries match the DueDeliveryIDs predicate.
-func WaitDue(ctx context.Context, dsn string, min int, deadline time.Duration) (int, error) {
-	var last int
-	until := time.Now().Add(deadline)
-	for time.Now().Before(until) {
-		c, err := CountDue(ctx, dsn)
-		if err == nil {
-			last = c
-			if c >= min {
-				return c, nil
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return last, fmt.Errorf("due count never reached %d within %s (last=%d)", min, deadline, last)
 }

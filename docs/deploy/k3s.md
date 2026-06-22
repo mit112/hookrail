@@ -178,9 +178,10 @@ curl -s --connect-timeout 5 http://<k3s-node-ip>:8082/healthz || echo "blocked (
 - **App-tier HA, data-tier single-node.** The relay app tier (api, worker,
   scheduler, admin, dashboard) now runs at 2 replicas with scheduler leader
   election and worker graceful drain — see the README HA section. However,
-  Postgres, Redis, OTel, Prometheus, Jaeger, and cloudflared each run as a
-  single pod. Node failure still takes the data tier down. Multi-node k3s and
-  datastore HA are deferred to a future slice.
+  Postgres, Redis, OTel, Prometheus, and Jaeger each run as a single pod
+  (`cloudflared` is bumped to 2 replicas in the prod overlay, but its live
+  cutover stays attended). Node failure still takes the data tier down.
+  Multi-node k3s and datastore HA are deferred to a future slice.
 - **Cloudflare Tunnel dependency.** Public access depends on the Cloudflare edge
   and the `cloudflared` Deployment (the tunnel runs as its own standalone
   Deployment, not a sidecar). A Cloudflare outage or tunnel disruption makes

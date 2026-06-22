@@ -213,8 +213,8 @@ func TestExperimentOrderedNoReorder(t *testing.T) {
 	}
 	load := &Load{APIURL: apiURL, Key: key, Topic: "chaos-e5.evt"}
 
-	const K = 3   // distinct ordering keys
-	const M = 30  // events per key
+	const K = 3  // distinct ordering keys
+	const M = 30 // events per key
 
 	// Post K*M events, sequence 1..M per key, interleaved.
 	var totalAccepted int
@@ -332,27 +332,34 @@ func TestHarnessScaleAndKillLeader(t *testing.T) {
 	}
 	inj := NewInjector(c)
 
-	// Kill the leader container; the standby must report leader shortly after.
-	if err := inj.KillLeader(ctx); err != nil {
+	// Kill the single leader container (fails loudly on split brain / no leader);
+	// a DIFFERENT surviving container must report leader shortly after, scraped
+	// directly (not via aggregate Prometheus, which can serve a stale sample).
+	killed, err := inj.KillLeader(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Prove the standby promoted: is_leader gauge reads 1 within a bound.
-	deadline := time.Now().Add(30 * time.Second)
-	promQuery := "hookrail_scheduler_is_leader"
-	for time.Now().Before(deadline) {
-		v, err := FetchCounter(ctx, promURL, promQuery)
-		if err == nil && v >= 1.0 {
-			t.Logf("standby promoted: is_leader=%v", v)
-			return
-		}
-		time.Sleep(time.Second)
+	newLeader, err := inj.WaitNewLeader(ctx, killed, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("standby scheduler never became leader after KillLeader within 30s")
+	t.Logf("failover: killed leader %.12s, survivor %.12s promoted", killed, newLeader)
 }
 
-// E6: leader scheduler failover — kill the leader, the standby sweeps the
-// backstop backlog, nothing stranded.
+// E6: leader scheduler failover — kill the leader while a SWEEPER-ONLY backlog
+// is outstanding; a surviving scheduler must promote and continue republishing
+// it, with nothing stranded.
+//
+// Non-vacuity (the credibility, per the chaos-oracle lesson): we use /fail/2 so
+// every delivery returns 500 on its first two attempts before succeeding. A
+// failed attempt moves the delivery to retry_scheduled with a future
+// next_attempt_at; the ingest hot-path XADD already happened once and was
+// consumed+ACKed on that failed attempt, so a due RETRY is re-published to Redis
+// ONLY by the scheduler sweeper. That makes the outstanding work a genuine
+// sweeper-only backlog — exactly what a dead leader must hand off. Workers stay
+// up the whole time, so recovery cannot be attributed to PEL autoclaim or
+// hot-path entries: if the survivor does not sweep, the retries never reach
+// attempt 3 and PollRecovered times out.
 func TestExperimentLeaderFailover(t *testing.T) {
 	c := NewCompose()
 	ctx := context.Background()
@@ -365,7 +372,7 @@ func TestExperimentLeaderFailover(t *testing.T) {
 		}
 	})
 
-	// Bring up scheduler=2, worker=2 for multi-replica HA.
+	// Bring up scheduler=2 (leader + standby), worker=2.
 	if err := c.Up(ctx, map[string]int{"scheduler": 2, "worker": 2}); err != nil {
 		t.Fatal(err)
 	}
@@ -374,80 +381,66 @@ func TestExperimentLeaderFailover(t *testing.T) {
 	}
 	inj := NewInjector(c)
 
-	// Use the slow handler so workers don't instantly drain the backlog.
-	key, err := Seed(ctx, c, slowURL, "chaos-e6.*")
+	// /fail/2: each delivery 500s on attempts 1 and 2, then 200 (seed sets
+	// max_attempts=8, so /fail/2 never dead-letters).
+	key, err := Seed(ctx, c, "http://test-receiver:9090/fail/2", "chaos-e6.*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	load := &Load{APIURL: apiURL, Key: key, Topic: "chaos-e6.evt"}
 
-	// Post a burst. These deliveries are pending in PG — the initial sweep already
-	// ran on an empty DB, so nothing published them to Redis. Workers are idle.
 	const n = 200
 	accepted, err := load.Burst(ctx, n)
 	if err != nil || accepted != n {
 		t.Fatalf("burst accepted %d/%d: %v", accepted, n, err)
 	}
 
-	// Prove non-vacuity: there must be due deliveries that only the sweeper can
-	// publish to Redis. Without the leader, these would strand forever.
-	preDue, err := WaitDue(ctx, dsn, 1, 30*time.Second)
-	if err != nil {
-		t.Fatalf("no due deliveries to sweep (vacuous): %v", err)
-	}
-	if preDue == 0 {
-		t.Fatal("preDue must be > 0 — no backstop backlog to fail over (vacuous)")
-	}
-
-	preDB, _ := FetchDB(ctx, dsn)
-	preInFlight := preDB.InFlight
-	base, _ := FetchCounter(ctx, promURL, "hookrail_sweeper_republished_total")
-	t.Logf("pre-kill: due=%d in-flight=%d sweeper_base=%v", preDue, preInFlight, base)
-
-	// Stop workers FIRST so they stop consuming the Redis stream. Without this,
-	// the original leader already published all delivery IDs to Redis and workers
-	// consume them — the standby sweeper has nothing to publish and the counter
-	// never advances, making the oracle vacuous. By stopping workers we guarantee
-	// the standby sweeper finds a backstop to republish.
-	if err := inj.Kill(ctx, "worker"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Kill the leader scheduler container.
-	if err := inj.KillLeader(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	// (a) Surviving scheduler reports leader within a bound.
-	dl := time.Now().Add(30 * time.Second)
-	promoted := false
-	for time.Now().Before(dl) {
-		v, err := FetchCounter(ctx, promURL, "hookrail_scheduler_is_leader")
-		if err == nil && v >= 1.0 {
-			t.Logf("standby promoted: is_leader=%v", v)
-			promoted = true
+	// Wait for a real retry backlog: deliveries that failed at least once and are
+	// now retry_scheduled, republishable ONLY by the sweeper. Nothing has
+	// succeeded yet (each needs attempt 3), so this is genuinely sweeper-only work.
+	var preDB DBState
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		d, e := FetchDB(ctx, dsn)
+		if e == nil && d.RetryScheduled >= 50 {
+			preDB = d
 			break
 		}
 		time.Sleep(time.Second)
 	}
-	if !promoted {
-		t.Fatal("standby scheduler never became leader after KillLeader within 30s")
+	if preDB.RetryScheduled < 50 {
+		t.Fatalf("no sweeper-only retry backlog formed (vacuous): retry_scheduled=%d", preDB.RetryScheduled)
 	}
+	t.Logf("pre-kill: retry_scheduled=%d in-flight=%d succeeded=%d", preDB.RetryScheduled, preDB.InFlight, preDB.Succeeded)
 
-	// (b) Sweeper counter advances — the new leader republishes the backlog.
-	if _, err := WaitCounterAbove(ctx, promURL, "hookrail_sweeper_republished_total", base, 2*time.Minute); err != nil {
-		t.Fatalf("sweeper never republished post-failover: %v", err)
-	}
-
-	// Restart workers so they can drain the republished backlog.
-	if err := inj.Start(ctx, "worker"); err != nil {
+	// Kill the single leader scheduler (fails loudly on split brain / no leader).
+	killed, err := inj.KillLeader(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// (c)+(d) Every accepted delivery eventually delivered; duplicates bounded by
-	// in-flight count at kill time + slack.
-	dupBound := preInFlight + 10
-	snap, err := PollRecovered(ctx, recvURL, dsn, accepted, dupBound, 4*time.Minute)
+	// (a) A DIFFERENT surviving scheduler promotes — scraped directly from the
+	// container, so a stale killed-leader sample can't fake it.
+	newLeader, err := inj.WaitNewLeader(ctx, killed, 30*time.Second)
+	if err != nil {
+		t.Fatalf("no survivor promoted after KillLeader: %v", err)
+	}
+	t.Logf("failover: killed %.12s, survivor %.12s promoted", killed, newLeader)
+
+	// (b) Baseline captured AFTER the old leader is dead and the survivor is
+	// confirmed leader, so any rise is unambiguously the survivor's republish
+	// work (not a pre-kill sweep by the doomed leader).
+	base, _ := FetchCounter(ctx, promURL, "hookrail_sweeper_republished_total")
+	if _, err := WaitCounterAbove(ctx, promURL, "hookrail_sweeper_republished_total", base, 3*time.Minute); err != nil {
+		t.Fatalf("survivor never republished the sweeper-only backlog post-failover: %v", err)
+	}
+
+	// (c)+(d) Every accepted delivery eventually succeeds (each after 2 failures
+	// driven through the survivor's sweep), nothing stranded; duplicates bounded
+	// by the in-flight count at kill time + slack (workers are never killed here,
+	// so dups stay near zero).
+	dupBound := preDB.InFlight + 10
+	snap, err := PollRecovered(ctx, recvURL, dsn, accepted, dupBound, 6*time.Minute)
 	if err != nil {
 		t.Fatalf("not recovered: %v", err)
 	}
