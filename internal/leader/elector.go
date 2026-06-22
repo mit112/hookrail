@@ -3,6 +3,7 @@ package leader
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,10 @@ type Elector struct {
 	interval time.Duration
 	isLeader func(bool)
 
+	// conn/pid are written only by the Run goroutine (tryAcquire/release) but read
+	// cross-goroutine by BackendPID (tests/observability), so mu guards every access
+	// that crosses goroutines — the in-goroutine query I/O on conn stays lock-free.
+	mu   sync.Mutex
 	conn *pgx.Conn // standalone lock conn; nil when not leader (H1: NOT a pgxpool checkout)
 	pid  uint32
 }
@@ -28,6 +33,8 @@ func New(dsn string, key int64, interval time.Duration, isLeader func(bool)) *El
 }
 
 func (e *Elector) BackendPID() uint32 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.conn == nil {
 		return 0
 	}
@@ -140,14 +147,18 @@ func (e *Elector) tryAcquire(ctx context.Context) (bool, error) {
 		_ = conn.Close(ctx)
 		return false, nil
 	}
+	e.mu.Lock()
 	e.conn = conn
 	e.pid = conn.PgConn().PID()
+	e.mu.Unlock()
 
 	if err := e.startupGuard(ctx); err != nil {
 		_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, e.key)
 		_ = conn.Close(ctx)
+		e.mu.Lock()
 		e.conn = nil
 		e.pid = 0
+		e.mu.Unlock()
 		return false, err
 	}
 
@@ -160,8 +171,10 @@ func (e *Elector) release(ctx context.Context) {
 	}
 	_, _ = e.conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, e.key)
 	_ = e.conn.Close(ctx)
+	e.mu.Lock()
 	e.conn = nil
 	e.pid = 0
+	e.mu.Unlock()
 }
 
 // test wrappers

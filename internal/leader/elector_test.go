@@ -148,15 +148,11 @@ func TestElectorFailoverOnBackendKill(t *testing.T) {
 func TestElectorOnElectedOnce(t *testing.T) {
 	dsn := startPG(t)
 	var electedCount, cycleCount atomic.Int64
-	a := leader.New(dsn, leader.SchedulerLeaderLockKey, 100*time.Millisecond,
-		func(v bool) {
-			if v {
-				electedCount.Add(1)
-			}
-		})
+	a := leader.New(dsn, leader.SchedulerLeaderLockKey, 100*time.Millisecond, func(bool) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	onElected := func(context.Context) error { return nil }
+	// Count onElected itself (not isLeader): a double-fire of the startup sweep must fail.
+	onElected := func(context.Context) error { electedCount.Add(1); return nil }
 	do := func(context.Context) error { cycleCount.Add(1); return nil }
 	go func() { _ = a.Run(ctx, 50*time.Millisecond, onElected, do) }()
 
@@ -164,6 +160,9 @@ func TestElectorOnElectedOnce(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool { return cycleCount.Load() >= 3 })
 	if n := electedCount.Load(); n != 1 {
 		t.Fatalf("onElected should fire exactly once per acquisition, got %d", n)
+	}
+	if cycleCount.Load() < electedCount.Load() {
+		t.Fatalf("do() must run after onElected, got cycles=%d elected=%d", cycleCount.Load(), electedCount.Load())
 	}
 	cancel()
 	time.Sleep(100 * time.Millisecond) // let goroutine exit and release lock
