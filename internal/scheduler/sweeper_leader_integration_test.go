@@ -103,9 +103,11 @@ func TestTwoSchedulerElectorsIntegration(t *testing.T) {
 		leaderCancel, standbyCancel = bCancel, aCancel
 	}
 
-	if leaderPub.count.Load() < 5 {
-		t.Fatalf("leader published %d, want >= 5", leaderPub.count.Load())
-	}
+	// The isLeader(true) callback fires inside tryAcquire, BEFORE onElected
+	// (swA.Startup) finishes publishing the backlog — so wait for the leader's
+	// startup sweep to drain the 5 seeded deliveries rather than asserting the
+	// count the instant leadership flips (otherwise this races under CI load).
+	waitFor(t, 3*time.Second, func() bool { return leaderPub.count.Load() >= 5 })
 	if standbyPub.count.Load() != 0 {
 		t.Fatalf("standby published %d, want 0", standbyPub.count.Load())
 	}
