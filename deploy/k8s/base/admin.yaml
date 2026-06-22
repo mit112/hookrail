@@ -63,6 +63,13 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: admin
       terminationGracePeriodSeconds: 30
 ---
 apiVersion: v1

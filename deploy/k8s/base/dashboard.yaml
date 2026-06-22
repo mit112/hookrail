@@ -80,6 +80,13 @@ spec:
         - name: producer-key
           secret:
             secretName: hookrail-dashboard-producer-key
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: dashboard
       terminationGracePeriodSeconds: 30
 ---
 apiVersion: v1

@@ -61,4 +61,15 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", "5"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: worker
       terminationGracePeriodSeconds: 30
