@@ -79,12 +79,35 @@ func (sw *Sweeper) RunOnce(ctx context.Context) (int, error) {
 	}
 }
 
-// Run sweeps immediately on startup (§3.3: "on startup + every 30s"), then on the interval.
-func (sw *Sweeper) Run(ctx context.Context) error {
+// Startup performs the initial sweep + reconcile on election.
+// It is the Elector's onElected callback.
+func (sw *Sweeper) Startup(ctx context.Context) error {
 	if _, err := sw.RunOnce(ctx); err != nil {
 		slog.Error("startup sweep failed", "err", err)
+		return err
 	}
 	sw.reconcileOrdered(ctx)
+	return nil
+}
+
+// Cycle performs one sweep + reconcile tick. It is the Elector's do callback;
+// only the leader calls it. Returns the error from RunOnce (or nil).
+func (sw *Sweeper) Cycle(ctx context.Context) error {
+	n, err := sw.RunOnce(ctx)
+	if err != nil {
+		slog.Error("sweep failed", "err", err)
+	} else if n > 0 {
+		slog.Info("sweep republished", "count", n)
+	}
+	sw.reconcileOrdered(ctx)
+	return err
+}
+
+// Run sweeps immediately on startup (§3.3: "on startup + every 30s"), then on
+// the interval. Retained for non-HA/dev use; production goes through the Elector
+// which gates Startup/Cycle on leadership.
+func (sw *Sweeper) Run(ctx context.Context) error {
+	_ = sw.Startup(ctx)
 	t := time.NewTicker(sw.Interval)
 	defer t.Stop()
 	for {
@@ -92,12 +115,7 @@ func (sw *Sweeper) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			if n, err := sw.RunOnce(ctx); err != nil {
-				slog.Error("sweep failed", "err", err)
-			} else if n > 0 {
-				slog.Info("sweep republished", "count", n)
-			}
-			sw.reconcileOrdered(ctx)
+			_ = sw.Cycle(ctx)
 		}
 	}
 }
