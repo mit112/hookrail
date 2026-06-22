@@ -19,6 +19,7 @@ import (
 // The script clamps now >= last to prevent a lagging replica from adding
 // tokens or rewinding state.  It does NOT use Redis TIME (which is
 // classified as non-deterministic by Redis and errors on writes after it).
+//nolint:gosec // Lua script — not a credential.
 const luaTokenBucket = `
 local rate=tonumber(ARGV[1]); local burst=tonumber(ARGV[2])
 local now=tonumber(ARGV[3]); local ttl=tonumber(ARGV[4])
