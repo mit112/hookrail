@@ -34,6 +34,9 @@ type Config struct {
 
 	OrderedKeyBacklogMax int // HOOKRAIL_ORDERED_KEY_BACKLOG_MAX, default 10000
 	OrderingKeyMaxLen    int // HOOKRAIL_ORDERING_KEY_MAX_LEN, default 256
+
+	DrainDeadline       time.Duration // HOOKRAIL_DRAIN_DEADLINE, default 25s, validated < 30s
+	DrainRetryJitterMax time.Duration // HOOKRAIL_DRAIN_RETRY_JITTER_MAX, default 2s
 }
 
 func Load() (Config, error) {
@@ -135,6 +138,24 @@ func Load() (Config, error) {
 			perr = fmt.Errorf("HOOKRAIL_ORDERING_KEY_MAX_LEN must be a positive integer")
 		} else {
 			c.OrderingKeyMaxLen = n
+		}
+	}
+	c.DrainDeadline = 25 * time.Second
+	if v := os.Getenv("HOOKRAIL_DRAIN_DEADLINE"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 || d >= 30*time.Second {
+			perr = fmt.Errorf("HOOKRAIL_DRAIN_DEADLINE must be a positive duration < 30s (got %q)", v)
+		} else {
+			c.DrainDeadline = d
+		}
+	}
+	c.DrainRetryJitterMax = 2 * time.Second
+	if v := os.Getenv("HOOKRAIL_DRAIN_RETRY_JITTER_MAX"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			perr = fmt.Errorf("HOOKRAIL_DRAIN_RETRY_JITTER_MAX must be a positive Go duration (got %q)", v)
+		} else {
+			c.DrainRetryJitterMax = d
 		}
 	}
 	if perr != nil {

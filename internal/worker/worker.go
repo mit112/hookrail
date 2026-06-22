@@ -42,26 +42,28 @@ type Worker struct {
 }
 
 // Run is the dispatch loop: drain new messages, then steal abandoned ones.
-func (w *Worker) Run(ctx context.Context) error {
-	for ctx.Err() == nil {
-		msgs, err := w.Queue.Read(ctx, w.Consumer, 16, 2*time.Second)
-		if err != nil && ctx.Err() == nil {
+// intakeCtx controls the XREADGROUP/Autoclaim intake loop (canceled on SIGTERM).
+// workCtx drives Process (claim/HTTP/record) so in-flight deliveries survive SIGTERM.
+func (w *Worker) Run(intakeCtx, workCtx context.Context) error {
+	for intakeCtx.Err() == nil {
+		msgs, err := w.Queue.Read(intakeCtx, w.Consumer, 16, 2*time.Second)
+		if err != nil && intakeCtx.Err() == nil {
 			slog.Warn("queue read", "err", err)
 			time.Sleep(time.Second)
 			continue
 		}
 		if len(msgs) == 0 {
 			// PEL recovery (§6): claim messages abandoned by crashed workers
-			msgs, _ = w.Queue.Autoclaim(ctx, w.Consumer, w.Lease, 16)
+			msgs, _ = w.Queue.Autoclaim(intakeCtx, w.Consumer, w.Lease, 16)
 		}
 		for _, m := range msgs {
-			w.Process(ctx, m.DeliveryID)
-			if err := w.Queue.Ack(ctx, m.ID); err != nil {
+			w.Process(workCtx, m.DeliveryID)
+			if err := w.Queue.Ack(intakeCtx, m.ID); err != nil {
 				slog.Warn("ack failed", "msg", m.ID, "err", err)
 			}
 		}
 	}
-	return ctx.Err()
+	return intakeCtx.Err()
 }
 
 // Process claims and attempts one delivery. Always safe to call with a

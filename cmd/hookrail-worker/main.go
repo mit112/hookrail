@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,21 +26,23 @@ import (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	intakeCtx, intakeStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer intakeStop()
+	workCtx, workCancel := context.WithCancel(context.Background())
+	defer workCancel()
 
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("config", "err", err)
 		os.Exit(1)
 	}
-	shutdown, err := obs.InitTracing(ctx, "hookrail-worker")
+	shutdown, err := obs.InitTracing(intakeCtx, "hookrail-worker")
 	if err != nil {
 		slog.Error("tracing", "err", err)
 		os.Exit(1)
 	}
 	defer func() { _ = shutdown(context.Background()) }()
-	s, err := store.Open(ctx, cfg.DatabaseURL)
+	s, err := store.Open(intakeCtx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("store", "err", err)
 		os.Exit(1)
@@ -52,7 +55,7 @@ func main() {
 	}
 	defer q.Close()
 	q.MaxLen = cfg.StreamMaxLen
-	if err := q.EnsureGroup(ctx); err != nil {
+	if err := q.EnsureGroup(intakeCtx); err != nil {
 		slog.Error("ensure group", "err", err)
 		os.Exit(1)
 	}
@@ -71,7 +74,7 @@ func main() {
 	defBurst := envFloat("HOOKRAIL_DEFAULT_BURST", 2000)
 	limits := ratelimit.NewRegistry(defRPS, defBurst)
 	el := &worker.EndpointLimits{Store: s, Registry: limits, Interval: 15 * time.Second, DefaultRate: defRPS, DefaultBurst: defBurst}
-	go el.Run(ctx)
+	go el.Run(intakeCtx)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.Handler())
@@ -84,6 +87,8 @@ func main() {
 			IdleTimeout:       60 * time.Second,
 		}).ListenAndServe()
 	}()
+	tracker := worker.NewInFlight()
+
 	const poolSize = 8 // goroutine pool (§3.4)
 	var wg sync.WaitGroup
 	for i := 0; i < poolSize; i++ {
@@ -93,12 +98,25 @@ func main() {
 			Backoff: backoff.Default(), Limits: limits,
 			MasterKey: cfg.MasterKey, Lease: 30 * time.Second,
 			Consumer: hostConsumer(host, i),
+			InFlight: tracker,
 		}
 		wg.Add(1)
-		go func() { defer wg.Done(); _ = w.Run(ctx) }()
+		go func() { defer wg.Done(); _ = w.Run(intakeCtx, workCtx) }()
 	}
 	slog.Info("hookrail-worker started", "pool", poolSize)
 	wg.Wait()
+
+	// Graceful drain: release any in-flight deliveries so survivors pick them up.
+	drainCtx, drainCancel := context.WithTimeout(workCtx, cfg.DrainDeadline)
+	defer drainCancel()
+	held := tracker.DrainSnapshot(drainCtx)
+	for _, h := range held {
+		jitter := time.Duration(rand.Int63n(int64(cfg.DrainRetryJitterMax))) //nolint:gosec // drain jitter, not a security context
+		if err := s.ReleaseClaimForDrain(drainCtx, h.ID, h.ClaimVersion, jitter); err != nil {
+			slog.Warn("drain release failed", "delivery_id", h.ID, "err", err)
+		}
+	}
+	workCancel()
 }
 
 func hostConsumer(host string, i int) string {
