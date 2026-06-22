@@ -40,6 +40,21 @@ KEY=$(kubectl -n "$NS" logs job/dashboard-keygen | /usr/bin/sed -n 's/^producer_
 [ -n "$KEY" ] || { echo "no producer key from keygen job"; exit 1; }
 kubectl -n "$NS" create secret generic hookrail-dashboard-producer-key --from-literal=producer_key="$KEY"
 for d in api worker scheduler admin dashboard; do kubectl -n "$NS" rollout status deploy/$d --timeout=120s; done
+# --- k8s-smoke assertions ---
+for d in api worker scheduler admin dashboard; do
+  READY=$(kubectl -n "$NS" get deployment "$d" -o jsonpath='{.status.readyReplicas}')
+  [ "$READY" = "2" ] || { echo "FAIL: $d readyReplicas=$READY, want 2"; exit 1; }
+done
+for d in api worker scheduler admin dashboard; do
+  kubectl -n "$NS" get pdb "$d" >/dev/null 2>&1 || { echo "FAIL: PDB $d not found"; exit 1; }
+done
+GRACE=$(kubectl -n "$NS" get deployment worker -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}')
+[ "$GRACE" = "30" ] || { echo "FAIL: worker terminationGracePeriodSeconds=$GRACE, want 30"; exit 1; }
+DRAIN_DEADLINE=$(kubectl -n "$NS" get configmap hookrail-config -o json 2>/dev/null | jq -r '.data.HOOKRAIL_DRAIN_DEADLINE // "25s"')
+DRAIN_SEC=$(echo "$DRAIN_DEADLINE" | /usr/bin/sed 's/s$//')
+if [ -n "$DRAIN_SEC" ] && [ "$DRAIN_SEC" -ge 30 ] 2>/dev/null; then
+  echo "FAIL: HOOKRAIL_DRAIN_DEADLINE=$DRAIN_DEADLINE >= terminationGracePeriodSeconds=30s"; exit 1
+fi
 # e2e flow over port-forward (NOT NodePort — fold #10; port-forward bypasses the default-deny netpol):
 kubectl -n "$NS" port-forward svc/api 18080:8080 >/dev/null 2>&1 & PF=$!; sleep 3
 ADMIN_PF_PORT=18082; kubectl -n "$NS" port-forward svc/admin $ADMIN_PF_PORT:8082 >/dev/null 2>&1 & PFA=$!; sleep 3
