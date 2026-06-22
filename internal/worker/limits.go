@@ -16,8 +16,10 @@ import (
 type EndpointLimits struct {
 	Store        *store.Store
 	Registry     *ratelimit.Registry
-	Interval     time.Duration // e.g. 15s
-	DefaultRate  float64       // worker default rps — what a reverted endpoint goes back to
+	Global       *ratelimit.GlobalLimiter // when non-nil, Refresh publishes override snapshot here
+	Fallback     *ratelimit.Registry      // per-endpoint fallback rates (shadow-debited on global allow)
+	Interval     time.Duration
+	DefaultRate  float64
 	DefaultBurst float64
 	applied      map[string]struct{} // endpoints currently carrying an override
 }
@@ -44,15 +46,48 @@ func (e *EndpointLimits) Refresh(ctx context.Context) {
 		slog.Warn("endpoint limits refresh failed; keeping previous", "err", err)
 		return
 	}
+
+	// Build the global snapshot + update the fallback registry.
+	// Drop the old applied-revert dance for the global path: membership lies
+	// entirely in the swapped snapshot. An endpoint not in the map routes to
+	// the local default Registry in the worker (allowDelivery router).
+	if e.Global != nil {
+		m := make(map[string]ratelimit.Limit, len(limits))
+		for ep, rps := range limits {
+			burst := rps * 2
+			if burst < 1 {
+				burst = 1
+			}
+			m[ep] = ratelimit.Limit{Rate: rps, Burst: burst}
+			e.Fallback.SetRate(ep, rps, burst)
+		}
+		// Reconcile removals in the fallback: endpoints that dropped out revert
+		// to the worker default in the fallback Registry (the global snapshot
+		// already lacks them after the swap).
+		if e.applied == nil {
+			e.applied = map[string]struct{}{}
+		}
+		for ep := range e.applied {
+			if _, still := m[ep]; !still {
+				e.Fallback.SetRate(ep, e.DefaultRate, e.DefaultBurst)
+			}
+		}
+		// Build next applied set from the new map keys
+		next := make(map[string]struct{}, len(m))
+		for ep := range m {
+			next[ep] = struct{}{}
+		}
+		e.applied = next
+		e.Global.SetSnapshot(m)
+		return
+	}
+
+	// Pure-local path (no GlobalLimiter configured): keep the existing behavior.
 	if e.applied == nil {
 		e.applied = map[string]struct{}{}
 	}
 	next := make(map[string]struct{}, len(limits))
 	for ep, rps := range limits {
-		// burst is normally 2x the rate, but a sub-1 burst can never accrue a
-		// full token (bucket.go Allow needs tokens >= 1), so a valid low rps
-		// (chk_rate only requires > 0, e.g. 0.1) would stall delivery to that
-		// endpoint forever. Floor the burst at 1 so low rates still deliver.
 		burst := rps * 2
 		if burst < 1 {
 			burst = 1
@@ -60,9 +95,6 @@ func (e *EndpointLimits) Refresh(ctx context.Context) {
 		e.Registry.SetRate(ep, rps, burst)
 		next[ep] = struct{}{}
 	}
-	// Reconcile removals: an endpoint whose last limiting sub was paused,
-	// deleted, or had rps cleared drops out of the query — revert its bucket to
-	// the worker default, else it stays throttled at the old rate forever.
 	for ep := range e.applied {
 		if _, still := next[ep]; !still {
 			e.Registry.SetRate(ep, e.DefaultRate, e.DefaultBurst)

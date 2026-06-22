@@ -4,13 +4,43 @@ package worker_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
+
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/mit112/hookrail/internal/ratelimit"
 	"github.com/mit112/hookrail/internal/store"
 	"github.com/mit112/hookrail/internal/worker"
 )
+
+var (
+	rlRedisOnce sync.Once
+	rlRedis     *redis.Client
+)
+
+func testRedis(t *testing.T) *redis.Client {
+	t.Helper()
+	rlRedisOnce.Do(func() {
+		ctx := context.Background()
+		rc, err := tcredis.Run(ctx, "redis:7-alpine")
+		if err != nil {
+			t.Fatalf("redis container: %v", err)
+		}
+		ep, err := rc.ConnectionString(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opt, err := redis.ParseURL(ep)
+		if err != nil {
+			t.Fatalf("parse redis URL: %v", err)
+		}
+		rlRedis = redis.NewClient(opt)
+	})
+	return rlRedis
+}
 
 // Reuses the worker package's existing integration testStore (worker_test.go).
 // time is driven explicitly: the token bucket only accrues on elapsed wall
@@ -68,5 +98,60 @@ func TestEndpointLimitsLowRateStillDelivers(t *testing.T) {
 
 	if !reg.Allow(epID, time.Now()) {
 		t.Fatal("a 0.1 rps endpoint must deliver at least once (burst floored to 1); delivery would stall forever otherwise")
+	}
+}
+
+func TestRefreshBuildsGlobalSnapshot(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	epID, _, _ := s.CreateEndpoint(ctx, [32]byte{}, "https://example.com/h", "")
+	low := 5.0
+	_, err := s.CreateSubscriptionFull(ctx, store.SubInput{TopicPattern: "z.*", EndpointID: epID, MaxAttempts: 3, RateLimitRPS: &low})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := testRedis(t)
+	rl := ratelimit.NewRedisLimiter(rdb, time.Minute)
+	g := ratelimit.NewGlobalLimiter(rl, ratelimit.NewRegistry(1000, 2000), 50*time.Millisecond)
+	el := &worker.EndpointLimits{
+		Store: s, Registry: ratelimit.NewRegistry(1000, 2000),
+		Global: g, Fallback: g.FallbackForTest(),
+		Interval: time.Hour, DefaultRate: 1000, DefaultBurst: 2000,
+	}
+	el.Refresh(ctx)
+	if !g.Has(epID) {
+		t.Fatal("override endpoint must be in the global snapshot")
+	}
+}
+
+func TestRefreshRemovesDroppedOverride(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	epID, _, _ := s.CreateEndpoint(ctx, [32]byte{}, "https://example.com/h", "")
+	low := 5.0
+	subID, err := s.CreateSubscriptionFull(ctx, store.SubInput{TopicPattern: "z.*", EndpointID: epID, MaxAttempts: 3, RateLimitRPS: &low})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := testRedis(t)
+	rl := ratelimit.NewRedisLimiter(rdb, time.Minute)
+	fb := ratelimit.NewRegistry(1000, 2000)
+	g := ratelimit.NewGlobalLimiter(rl, fb, 50*time.Millisecond)
+	el := &worker.EndpointLimits{
+		Store: s, Registry: ratelimit.NewRegistry(1000, 2000),
+		Global: g, Fallback: fb,
+		Interval: time.Hour, DefaultRate: 1000, DefaultBurst: 2000,
+	}
+	el.Refresh(ctx)
+	if !g.Has(epID) {
+		t.Fatal("override endpoint must be in the global snapshot before removal")
+	}
+	// Soft-delete the limiting sub → drops out of EndpointRateLimits
+	if err := s.SoftDeleteSubscription(ctx, subID); err != nil {
+		t.Fatal(err)
+	}
+	el.Refresh(ctx)
+	if g.Has(epID) {
+		t.Fatal("removed override must NOT be in the global snapshot (routes back to local default)")
 	}
 }
