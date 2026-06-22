@@ -59,6 +59,22 @@ func TestCreateSubAgainstDeletedEndpointRejected(t *testing.T) {
 	}
 }
 
+func TestCreateSubscriptionRejectsOutOfBoundsRPS(t *testing.T) {
+	srv, _ := newServer(t)
+	ew := do(t, srv, "POST", "/v1/endpoints", map[string]string{"url": "https://example.com/h"})
+	var ep struct{ ID string }
+	_ = json.Unmarshal(ew.Body.Bytes(), &ep)
+
+	for _, rps := range []float64{0.001, 2_000_000} {
+		w := do(t, srv, "POST", "/v1/subscriptions", map[string]any{
+			"topic_pattern": "a.*", "endpoint_id": ep.ID, "max_attempts": 3, "rate_limit_rps": rps,
+		})
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("rps=%v: want 422, got %d", rps, w.Code)
+		}
+	}
+}
+
 func TestOrderedSubscriptionImmutable(t *testing.T) {
 	srv, _ := newServer(t)
 	// create endpoint first

@@ -37,6 +37,10 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
 	if req.MaxAttempts == 0 {
 		req.MaxAttempts = 8
 	}
+	if req.RateLimitRPS != nil && (*req.RateLimitRPS < 0.01 || *req.RateLimitRPS > 1000000) {
+		httpx.Problem(w, http.StatusUnprocessableEntity, "invalid rate_limit_rps", "rate_limit_rps must be 0.01..1000000")
+		return
+	}
 	if len(req.BackoffPolicy) > 0 {
 		if err := backoff.Validate(req.BackoffPolicy); err != nil {
 			httpx.Problem(w, http.StatusUnprocessableEntity, "invalid backoff_policy", err.Error())
@@ -53,7 +57,7 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, http.StatusConflict, "endpoint not available", "endpoint is missing or soft-deleted")
 		return
 	case isCheckViolation(err):
-		httpx.Problem(w, http.StatusUnprocessableEntity, "invalid subscription", "max_attempts must be 1..100 and rate_limit_rps > 0")
+		httpx.Problem(w, http.StatusUnprocessableEntity, "invalid subscription", "max_attempts must be 1..100 and rate_limit_rps must be 0.01..1000000")
 		return
 	case err != nil:
 		httpx.Problem(w, http.StatusServiceUnavailable, "create failed", "query error")
@@ -106,6 +110,10 @@ func (s *Server) patchSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	if req.RateLimitRPS != nil && (*req.RateLimitRPS < 0.01 || *req.RateLimitRPS > 1000000) {
+		httpx.Problem(w, http.StatusUnprocessableEntity, "invalid rate_limit_rps", "rate_limit_rps must be 0.01..1000000")
+		return
+	}
 	if len(req.BackoffPolicy) > 0 {
 		if err := backoff.Validate(req.BackoffPolicy); err != nil {
 			httpx.Problem(w, http.StatusUnprocessableEntity, "invalid backoff_policy", err.Error())
@@ -137,7 +145,7 @@ func (s *Server) patchSubscription(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, http.StatusNotFound, "not found", "no subscription with that id")
 		return
 	case isCheckViolation(err):
-		httpx.Problem(w, http.StatusUnprocessableEntity, "invalid subscription", "max_attempts must be 1..100 and rate_limit_rps > 0")
+		httpx.Problem(w, http.StatusUnprocessableEntity, "invalid subscription", "max_attempts must be 1..100 and rate_limit_rps must be 0.01..1000000")
 		return
 	case err != nil:
 		httpx.Problem(w, http.StatusServiceUnavailable, "update failed", "query error")
