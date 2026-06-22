@@ -125,6 +125,7 @@ func main() {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
 	url := fs.String("url", "http://test-receiver:9090/succeed", "endpoint URL to deliver to")
 	topic := fs.String("topic", "demo.*", "subscription topic pattern")
+	ordered := fs.Bool("ordered", false, "create ordered subscription")
 	_ = fs.Parse(os.Args[2:])
 
 	cfg, err := config.Load()
@@ -169,7 +170,12 @@ func main() {
 		slog.Error("create endpoint", "err", err)
 		os.Exit(1)
 	}
-	subID, err := s.CreateSubscription(ctx, *topic, epID, 8)
+	subID, err := s.CreateSubscriptionFull(ctx, store.SubInput{
+		TopicPattern: *topic,
+		EndpointID:   epID,
+		MaxAttempts:  8,
+		Ordered:      *ordered,
+	})
 	if err != nil {
 		slog.Error("create subscription", "err", err)
 		os.Exit(1)

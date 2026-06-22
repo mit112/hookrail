@@ -7,6 +7,9 @@ package chaos
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -196,4 +199,128 @@ func TestExperimentRedisQueueLoss(t *testing.T) {
 		t.Fatalf("not recovered: %v", err)
 	}
 	t.Logf("recovered via PG sweeper: succeeded=%d distinct=%d dups=%d", snap.DB.Succeeded, snap.Stats.Distinct, snap.Stats.Duplicates)
+}
+
+// E5: ordered FIFO under worker kill — the zero-reorder oracle.
+func TestExperimentOrderedNoReorder(t *testing.T) {
+	c, inj := setupStack(t)
+	ctx := context.Background()
+
+	const orderedURL = "http://test-receiver:9090/ordered-slow"
+	key, err := SeedOrdered(ctx, c, orderedURL, "chaos-e5.*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := &Load{APIURL: apiURL, Key: key, Topic: "chaos-e5.evt"}
+
+	const K = 3   // distinct ordering keys
+	const M = 30  // events per key
+
+	// Post K*M events, sequence 1..M per key, interleaved.
+	var totalAccepted int
+	for seq := 1; seq <= M; seq++ {
+		for ki := 0; ki < K; ki++ {
+			orderingKey := fmt.Sprintf("key-%d", ki)
+			ids, err := load.PostOrdered(ctx, orderingKey, seq)
+			if err != nil {
+				t.Fatalf("post ordered key=%s seq=%d: %v", orderingKey, seq, err)
+			}
+			totalAccepted += len(ids)
+		}
+	}
+	t.Logf("accepted %d deliveries across %d keys × %d events", totalAccepted, K, M)
+
+	// Prove the fault has a live ordered delivery IN-FLIGHT to disrupt — not merely
+	// pending backlog. With at-most-one-in-flight per key, NonTerminal is dominated by
+	// pending rows, so we must assert in_flight>=1 specifically; otherwise the kill only
+	// proves drain-after-restart, not recovery of a killed in-flight ordered head.
+	pre, err := WaitInFlight(ctx, dsn, 1, 30*time.Second)
+	if err != nil {
+		t.Fatalf("no ordered delivery in-flight to disrupt (vacuous): %v", err)
+	}
+	t.Logf("fault fired: killing worker with %d in-flight (%d non-terminal)", pre.InFlight, pre.NonTerminal())
+
+	if err := inj.Kill(ctx, "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := inj.Start(ctx, "worker"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only claimed-but-unacked deliveries at the kill can legitimately be re-sent; bound
+	// dups by the in-flight count (≤K) plus slack, not the (much larger) pending backlog.
+	dupBound := pre.InFlight + 5
+	snap, err := PollRecovered(ctx, recvURL, dsn, totalAccepted, dupBound, 4*time.Minute)
+	if err != nil {
+		t.Fatalf("not recovered: %v", err)
+	}
+	t.Logf("recovered: succeeded=%d distinct=%d dups=%d (bound %d)",
+		snap.DB.Succeeded, snap.Stats.Distinct, snap.Stats.Duplicates, dupBound)
+
+	// Ordered oracle: poll per-key arrival order, assert strictly monotonic.
+	var orderedStats map[string][]int
+	for attempt := 0; attempt < 15; attempt++ {
+		orderedStats = fetchOrderedStats(ctx, recvURL)
+		if len(orderedStats) == K {
+			complete := true
+			for ki := 0; ki < K; ki++ {
+				if len(orderedStats[fmt.Sprintf("key-%d", ki)]) != M {
+					complete = false
+					break
+				}
+			}
+			if complete {
+				break
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	if len(orderedStats) != K {
+		t.Fatalf("ordered keys: got %d, want %d: %v", len(orderedStats), K, orderedStats)
+	}
+	for ki := 0; ki < K; ki++ {
+		keyName := fmt.Sprintf("key-%d", ki)
+		seqs, ok := orderedStats[keyName]
+		if !ok {
+			t.Fatalf("key %q missing from ordered-stats", keyName)
+		}
+		if len(seqs) != M {
+			t.Fatalf("key %q: got %d seqs, want %d: %v", keyName, len(seqs), M, seqs)
+		}
+		// Strictly increasing: no reorder, no gaps, no dupes.
+		seen := map[int]bool{}
+		for i, s := range seqs {
+			if s < 1 || s > M {
+				t.Fatalf("key %q: seq %d out of range [1,%d] at position %d", keyName, s, M, i)
+			}
+			if seen[s] {
+				t.Fatalf("key %q: duplicate seq %d at position %d", keyName, s, i)
+			}
+			seen[s] = true
+			if i > 0 && s <= seqs[i-1] {
+				t.Fatalf("key %q: reorder at position %d: %d after %d", keyName, i, s, seqs[i-1])
+			}
+		}
+		for s := 1; s <= M; s++ {
+			if !seen[s] {
+				t.Fatalf("key %q: missing seq %d (gap)", keyName, s)
+			}
+		}
+	}
+	t.Logf("ordered oracle: %d keys × %d seqs all strictly monotonic, no gaps, no dupes", K, M)
+}
+
+// fetchOrderedStats calls GET /ordered-stats on the test-receiver.
+func fetchOrderedStats(ctx context.Context, recvURL string) map[string][]int {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, recvURL+"/ordered-stats", nil)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out map[string][]int
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil
+	}
+	return out
 }

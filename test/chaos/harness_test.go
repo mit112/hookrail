@@ -146,6 +146,21 @@ func Seed(ctx context.Context, c *Compose, url, topic string) (string, error) {
 	return "", fmt.Errorf("no producer_key in seed output:\n%s", out)
 }
 
+// SeedOrdered is like Seed but creates an ordered subscription.
+func SeedOrdered(ctx context.Context, c *Compose, url, topic string) (string, error) {
+	out, err := c.Run(ctx, "api", "hookrail-ctl", "seed", "-url", url, "-topic", topic, "-ordered")
+	if err != nil {
+		return "", fmt.Errorf("seed ordered: %w\n%s", err, out)
+	}
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "producer_key="); ok {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("no producer_key in seed output:\n%s", out)
+}
+
 type Load struct {
 	APIURL, Key, Topic string
 	HTTP               *http.Client
@@ -170,6 +185,28 @@ func (l *Load) Post(ctx context.Context) ([]string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, l.APIURL+"/v1/events", bytes.NewBufferString(body))
 	req.Header.Set("Authorization", "Bearer "+l.Key)
 	req.Header.Set("Content-Type", "application/json")
+	resp, err := l.client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		return nil, fmt.Errorf("ingest status %d", resp.StatusCode)
+	}
+	var out ingestResp
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || len(out.DeliveryIDs) == 0 {
+		return nil, fmt.Errorf("bad ingest resp: %w", err)
+	}
+	return out.DeliveryIDs, nil
+}
+
+// PostOrdered sends one event with an ordering key and a sequence payload.
+func (l *Load) PostOrdered(ctx context.Context, orderingKey string, seq int) ([]string, error) {
+	body := fmt.Sprintf(`{"topic":%q,"payload":{"key":%q,"seq":%d}}`, l.Topic, orderingKey, seq)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, l.APIURL+"/v1/events", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+l.Key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hookrail-Ordering-Key", orderingKey)
 	resp, err := l.client().Do(req)
 	if err != nil {
 		return nil, err
@@ -315,6 +352,26 @@ func WaitNonTerminal(ctx context.Context, dsn string, min int, deadline time.Dur
 		time.Sleep(200 * time.Millisecond)
 	}
 	return last, fmt.Errorf("non-terminal never reached %d within %s (last=%d)", min, deadline, last.NonTerminal())
+}
+
+// WaitInFlight polls until at least `min` deliveries are in_flight — proving a delivery-path
+// fault has a claimed-but-unacked delivery to disrupt. For ordered keys at-most-one-in-flight
+// per key means NonTerminal is dominated by pending backlog, so in_flight must be asserted
+// specifically (else the kill only proves drain-after-restart, not in-flight recovery).
+func WaitInFlight(ctx context.Context, dsn string, min int, deadline time.Duration) (DBState, error) {
+	var last DBState
+	until := time.Now().Add(deadline)
+	for time.Now().Before(until) {
+		db, err := FetchDB(ctx, dsn)
+		if err == nil {
+			last = db
+			if db.InFlight >= min {
+				return db, nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return last, fmt.Errorf("in_flight never reached %d within %s (last in_flight=%d, non_terminal=%d)", min, deadline, last.InFlight, last.NonTerminal())
 }
 
 // PollRecovered asserts an EXACT succeeded count — every accepted delivery, and only those,
