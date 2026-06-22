@@ -281,6 +281,84 @@ func TestProcessRateLimitedReleasesWithoutBurningAttempt(t *testing.T) {
 	}
 }
 
+// fakeLimiter always returns (allowed, err) as configured.
+type fakeLimiter struct {
+	allowed bool
+	err     error
+}
+
+func (f *fakeLimiter) Allow(_ context.Context, _ string, _, _ float64, _ time.Time) (bool, error) {
+	return f.allowed, f.err
+}
+
+func TestAllowDelivery_GlobalDenyReleasesNoAttempt(t *testing.T) {
+	s := testStore(t)
+	recv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("no POST should happen when globally rate limited")
+	}))
+	defer recv.Close()
+	id, _ := seed(t, s, recv.URL)
+
+	// Get the actual endpoint ID from the delivery row
+	var epID string
+	if err := s.Pool.QueryRow(context.Background(),
+		`SELECT endpoint_id FROM deliveries WHERE id=$1`, id).Scan(&epID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := newWorker(s)
+	// Build a GlobalLimiter that Has the endpoint but denies it
+	fb := ratelimit.NewRegistry(1000, 2000)
+	g := ratelimit.NewGlobalLimiterWith(&fakeLimiter{allowed: false}, fb, 50*time.Millisecond)
+	// Put the real endpoint ID in the snapshot so Has returns true
+	g.SetSnapshot(map[string]ratelimit.Limit{epID: {Rate: 1, Burst: 2}})
+	w.Global = g
+
+	w.Process(context.Background(), id)
+
+	var count int
+	var st string
+	if err := s.Pool.QueryRow(context.Background(),
+		`SELECT attempt_count, state::text FROM deliveries WHERE id=$1`, id).Scan(&count, &st); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || st != "retry_scheduled" {
+		t.Fatalf("after global rate-limited release: count=%d state=%s, want 0/retry_scheduled", count, st)
+	}
+	var attempts int
+	if err := s.Pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1`, id).Scan(&attempts); err != nil || attempts != 0 {
+		t.Fatalf("global rate limit recorded %d attempts, want 0", attempts)
+	}
+}
+
+func TestAllowDelivery_DefaultEndpointUsesLocalRegistry(t *testing.T) {
+	s := testStore(t)
+	recv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("no POST should happen when locally rate limited")
+	}))
+	defer recv.Close()
+	id, _ := seed(t, s, recv.URL)
+
+	w := newWorker(s)
+	w.Limits = ratelimit.NewRegistry(0.0001, 0) // local bucket starts empty → deny on Allow
+	// Global exists but endpoint is NOT in its snapshot → Has returns false → routes to local
+	g := ratelimit.NewGlobalLimiterWith(&fakeLimiter{allowed: true}, ratelimit.NewRegistry(1000, 2000), 50*time.Millisecond)
+	w.Global = g
+
+	w.Process(context.Background(), id)
+
+	var count int
+	var st string
+	if err := s.Pool.QueryRow(context.Background(),
+		`SELECT attempt_count, state::text FROM deliveries WHERE id=$1`, id).Scan(&count, &st); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || st != "retry_scheduled" {
+		t.Fatalf("local default endpoint should be rate-limited: count=%d state=%s, want 0/retry_scheduled", count, st)
+	}
+}
+
 func mustPrefixes(ps ...string) []netip.Prefix {
 	out := make([]netip.Prefix, len(ps))
 	for i, p := range ps {

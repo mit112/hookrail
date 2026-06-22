@@ -51,4 +51,9 @@ var (
 		Name: "hookrail_ordered_key_backlog",
 		Help: "Total non-terminal deliveries across all ordered keys (sum of per-key backlog_count).",
 	})
+
+	RatelimitDecisions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "hookrail_ratelimit_decisions_total",
+		Help: "Rate-limit decisions at the worker delivery path, by result (allowed|denied) and mode (global|local|failopen).",
+	}, []string{"result", "mode"})
 )

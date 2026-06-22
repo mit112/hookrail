@@ -33,7 +33,8 @@ type Worker struct {
 	Client    *http.Client // ssrf.NewHTTPClient(Policy)
 	Policy    ssrf.Policy
 	Backoff   backoff.Policy
-	Limits    *ratelimit.Registry // per endpoint id
+	Limits    *ratelimit.Registry    // per endpoint id
+	Global    *ratelimit.GlobalLimiter // when non-nil, override endpoints route through Redis-backed global limiter
 	MasterKey [32]byte
 	Lease     time.Duration
 	Consumer  string
@@ -123,7 +124,10 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 	// per-endpoint token bucket (§4): over-budget → RELEASE the claim.
 	// No HTTP request happened, so no attempt budget may be consumed — the
 	// release decrements attempt_count back and reschedules shortly.
-	if !w.Limits.Allow(d.EndpointID, time.Now()) {
+	now := time.Now()
+	allowed, mode := w.allowDelivery(ctx, d.EndpointID, now)
+	obs.RatelimitDecisions.WithLabelValues(decResult(allowed), mode).Inc()
+	if !allowed {
 		if err := w.Store.ReleaseClaim(ctx, d.ID, d.ClaimVersion, time.Second); err != nil {
 			slog.Warn("release after rate limit failed", "delivery_id", d.ID, "err", err)
 			// release failed → the row may still be in_flight under our claim;
@@ -139,6 +143,22 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 
 	res := w.attempt(ctx, d)
 	w.record(ctx, d, res)
+}
+
+// allowDelivery routes the rate-limit check: global Redis-backed for override
+// endpoints, local in-process Registry for everything else.
+func (w *Worker) allowDelivery(ctx context.Context, endpoint string, now time.Time) (bool, string) {
+	if w.Global != nil && w.Global.Has(endpoint) {
+		return w.Global.Allow(ctx, endpoint, now)
+	}
+	return w.Limits.Allow(endpoint, now), "local"
+}
+
+func decResult(allowed bool) string {
+	if allowed {
+		return "allowed"
+	}
+	return "denied"
 }
 
 // attempt runs the guarded POST and classifies. Panics are recovered to a
