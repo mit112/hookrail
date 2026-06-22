@@ -227,10 +227,16 @@ replicas for zero-downtime deploys and single-replica failure tolerance.
   reserve-before-claim tracker closes the race between a claim-in-progress and
   the drain fence, guaranteeing every straggler is released within the
   configured `HOOKRAIL_DRAIN_DEADLINE`.
-- **Per-replica rate limiting.** The `rate_limit_rps` cap is enforced
-  independently by each worker replica. With N workers the effective rate can
-  reach N × `rate_limit_rps`. True global (distributed) rate limiting is
-  deferred.
+- **Global rate limiting for override endpoints.** Endpoints with an explicit
+  `rate_limit_rps` override are now enforced **globally** across all worker
+  replicas via a shared Redis token bucket (on by default when Redis is
+  configured; `HOOKRAIL_GLOBAL_RATELIMIT=0` disables). A changed override takes
+  effect within one successful limits refresh (`HOOKRAIL_LIMITS_REFRESH_INTERVAL`,
+  default 15s). Endpoints without an override keep the per-replica local limiter,
+  whose effective rate can still reach N × `rate_limit_rps` with N workers. The
+  global path is **cap-relaxing under failure**: a limiter-command error falls
+  back to the per-replica bucket (fail-open) and Redis state loss reconstructs
+  full buckets — both may briefly admit above the cap, never throttle below it.
 - **Datastore remains single-instance; tunnel cutover stays attended.** Postgres
   and Redis each run at `replicas: 1` — data-tier HA is out of scope for this
   release. The Cloudflare Tunnel (`cloudflared`) is bumped to 2 replicas in the
@@ -257,11 +263,18 @@ These are documented design trade-offs, not bugs.
 
 ### Delivery semantics
 
-- **`rate_limit_rps` is per-worker best-effort.** Each worker independently applies
-  the MIN per-endpoint `rate_limit_rps` to its own limiter. With N workers the
-  effective rate can be up to N × `rate_limit_rps`; true global (distributed) rate
-  limiting is deferred. The burst is floored at 1, so even sub-0.5 rps values
-  eventually deliver.
+- **`rate_limit_rps` is enforced globally for override endpoints, per-replica
+  otherwise.** Endpoints carrying an explicit override are capped globally across
+  replicas via a shared Redis token bucket (`HOOKRAIL_GLOBAL_RATELIMIT`, on by
+  default with Redis); the cap re-applies within one successful limits refresh
+  after a change. Endpoints without an override use each worker's local limiter
+  (MIN per-endpoint rps), so their effective rate can reach N × `rate_limit_rps`
+  with N workers. The global path is cap-relaxing under failure: a limiter-command
+  error falls back to the local bucket (fail-open) and Redis state loss
+  reconstructs full buckets — both may briefly exceed the cap, never throttle
+  below it. Burst is floored at 1, so even sub-0.5 rps values eventually deliver.
+  Tunables: `HOOKRAIL_RL_TIMEOUT_MS` (default 50ms), `HOOKRAIL_RL_TTL_FLOOR_S`
+  (default 60s).
 - **Secret rotation & URL cutover is eventual.** After `rotate-secret`, the old
   secret stays valid until every in-flight attempt completes or times out. The new
   secret is returned once and never stored in plaintext.

@@ -1,5 +1,6 @@
-// Package ratelimit is the in-process token bucket of §4 (Redis-backed
-// distributed version is P2). Used per-endpoint by workers and per-key at
+// Package ratelimit is the in-process token bucket of §4. The Redis-backed
+// distributed version is implemented for the worker delivery path (P2); see
+// redisbucket.go / global.go. Used per-endpoint by workers and per-key at
 // ingress (§10).
 package ratelimit
 

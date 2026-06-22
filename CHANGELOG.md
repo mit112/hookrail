@@ -16,6 +16,7 @@ Opt-in strict-FIFO per-key ordering with pause-on-dead-letter, skip, backlog cap
 - **Backlog cap:** `HOOKRAIL_ORDERED_KEY_BACKLOG_MAX` (default 10000) per key; 429 + `Retry-After` when exceeded.
 - **Chaos-proven:** zero-reorder oracle (E5) under worker kill — 3× deterministic passes.
 - **App-tier HA:** scheduler leader election via PG advisory lock; worker graceful drain with reserve-before-claim tracker; per-replica rate-limit disclosure; 2-replica manifests with PDBs, anti-affinity, and preStop hooks; chaos-proven leader-failover oracle (E6).
+- **Global rate limiting:** endpoints with an explicit `rate_limit_rps` override are enforced across all worker replicas via a shared Redis token bucket (atomic Lua, client-clock with clamp), on by default when Redis is configured (`HOOKRAIL_GLOBAL_RATELIMIT=0` disables). Cap-relaxing under failure — limiter-command errors fall back to the per-replica bucket (fail-open) and Redis state loss reconstructs full buckets. A changed override propagates within one successful limits refresh. Tunables: `HOOKRAIL_RL_TIMEOUT_MS`, `HOOKRAIL_RL_TTL_FLOOR_S`. Chaos-proven fail-open liveness + cap re-enforcement oracle (E_RL).
 - Unordered delivery path is unchanged.
 
 ## [P1]

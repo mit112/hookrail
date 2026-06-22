@@ -205,9 +205,13 @@ curl -s --connect-timeout 5 http://<k3s-node-ip>:8082/healthz || echo "blocked (
   `pgx.Conn`. PgBouncer in transaction-pooling mode assigns a different backend
   on each statement, breaking session-lock semantics. Use **direct PG
   connections or session-pooling only** — never transaction-pooling.
-- **Per-replica rate limiting.** Each worker replica enforces `rate_limit_rps`
-  independently. With N worker replicas the effective per-endpoint rate can
-  reach N × `rate_limit_rps`. True global rate limiting is deferred.
+- **Rate limiting.** Endpoints with an explicit `rate_limit_rps` override are
+  enforced **globally** across worker replicas via a shared Redis token bucket
+  (on by default when Redis is configured; `HOOKRAIL_GLOBAL_RATELIMIT=0`
+  disables), re-applied within one successful limits refresh. Endpoints without an
+  override use each replica's local limiter, whose per-endpoint rate can reach
+  N × `rate_limit_rps` with N replicas. The global path is cap-relaxing under
+  failure (fail-open to the local bucket; Redis state loss rebuilds full buckets).
 - **No PodSecurity / backup.** The namespace has no PodSecurity admission
   (restricted) and there is no automated Postgres backup. Both are deferred to a
   future slice.
