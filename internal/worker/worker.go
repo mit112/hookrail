@@ -37,6 +37,8 @@ type Worker struct {
 	MasterKey [32]byte
 	Lease     time.Duration
 	Consumer  string
+
+	InFlight *InFlight // race-free in-flight tracker (reserve-before-claim); nil tolerated
 }
 
 // Run is the dispatch loop: drain new messages, then steal abandoned ones.
@@ -65,13 +67,26 @@ func (w *Worker) Run(ctx context.Context) error {
 // Process claims and attempts one delivery. Always safe to call with a
 // delivery someone else owns — the CAS makes it a no-op.
 func (w *Worker) Process(ctx context.Context, deliveryID string) {
+	if w.InFlight != nil {
+		w.InFlight.Reserve()
+	}
 	claimed, d, err := w.Store.ClaimDelivery(ctx, deliveryID, w.Lease)
 	if err != nil {
 		slog.Error("claim", "delivery_id", deliveryID, "err", err)
+		if w.InFlight != nil {
+			w.InFlight.Abort()
+		}
 		return
 	}
 	if !claimed {
+		if w.InFlight != nil {
+			w.InFlight.Abort()
+		}
 		return // ack & drop: someone else owns it (§3.4)
+	}
+
+	if w.InFlight != nil {
+		w.InFlight.Finalize(d.ID, d.ClaimVersion)
 	}
 
 	// hard stop: a crash loop that claims-without-completing must terminate.
@@ -81,8 +96,15 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 	// un-counts this claim (no HTTP request happened; the attempt history
 	// must never exceed the max_attempts contract).
 	if d.AttemptCount > d.MaxAttempts {
-		if _, err := w.Store.DeadLetterExhausted(ctx, d.ID, d.ClaimVersion); err != nil && !errors.Is(err, store.ErrStaleClaim) {
+		_, err := w.Store.DeadLetterExhausted(ctx, d.ID, d.ClaimVersion)
+		if err != nil && !errors.Is(err, store.ErrStaleClaim) {
 			slog.Error("dead-letter exhausted failed; lease recovery will retry", "delivery_id", d.ID, "err", err)
+			// do NOT Remove on error — drain must still release it
+		} else {
+			// success or ErrStaleClaim (another owner has it) → Remove
+			if w.InFlight != nil {
+				w.InFlight.Remove(d.ID)
+			}
 		}
 		return
 	}
@@ -94,6 +116,8 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 		if err := w.Store.ReleaseClaim(ctx, d.ID, d.ClaimVersion, time.Second); err != nil {
 			slog.Warn("release after rate limit failed", "delivery_id", d.ID, "err", err)
 		}
+		// Rate-limit release is not a terminal write; do NOT Remove.
+		// Drain's ReleaseClaimForDrain WHERE state='in_flight' is a safe no-op.
 		return
 	}
 
@@ -178,6 +202,10 @@ func (w *Worker) record(ctx context.Context, d store.ClaimedDelivery, res store.
 	nextHead, err := w.Store.CompleteAttempt(ctx, res, pol, d.MaxAttempts)
 	switch {
 	case err == nil:
+		// Confirmed terminal write → Remove from tracker.
+		if w.InFlight != nil {
+			w.InFlight.Remove(d.ID)
+		}
 		// Publish the next head to Redis AFTER commit (store never XADDs — BLOCKER-2).
 		// The sweeper is the backstop if the publish fails.
 		if nextHead != nil && w.Queue != nil {
@@ -186,12 +214,17 @@ func (w *Worker) record(ctx context.Context, d store.ClaimedDelivery, res store.
 			}
 		}
 	case errors.Is(err, store.ErrStaleClaim):
+		// Another owner has it — Remove from tracker.
+		if w.InFlight != nil {
+			w.InFlight.Remove(d.ID)
+		}
 		// our lease expired and another worker owns this delivery now —
 		// drop our result; the new owner's completion is authoritative
 		slog.Info("dropped stale completion", "delivery_id", d.ID, "attempt", res.AttemptNo)
 	default:
-		// PG write failed: do nothing — the lease expires and both recovery
-		// layers re-run the attempt. Duplicate possible, loss impossible (§10).
+		// PG write failed: do NOT Remove — drain will release it.
+		// The lease expires and both recovery layers re-run the attempt.
+		// Duplicate possible, loss impossible (§10).
 		slog.Error("record attempt failed; lease recovery will retry",
 			"delivery_id", d.ID, "err", err)
 	}
