@@ -33,3 +33,55 @@ func TestLoadRejectsNonPositiveRetention(t *testing.T) {
 		t.Fatal("zero RETENTION_EVENT_PAYLOAD_DAYS must fail startup (design §3)")
 	}
 }
+
+func TestGlobalRateLimitDefaults(t *testing.T) {
+	// With RedisAddr and no explicit flag: defaults to true.
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.GlobalRateLimit {
+		t.Fatal("GlobalRateLimit should default to true when RedisAddr is set")
+	}
+	if c.RLTimeout != 50*time.Millisecond {
+		t.Fatalf("RLTimeout default = %v", c.RLTimeout)
+	}
+	if c.RLTTLFloor != 60*time.Second {
+		t.Fatalf("RLTTLFloor default = %v", c.RLTTLFloor)
+	}
+}
+
+func TestGlobalRateLimitDisabled(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("HOOKRAIL_GLOBAL_RATELIMIT", "0")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GlobalRateLimit {
+		t.Fatal("GlobalRateLimit should be false when HOOKRAIL_GLOBAL_RATELIMIT=0")
+	}
+}
+
+func TestGlobalRateLimitOverrides(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("HOOKRAIL_RL_TIMEOUT_MS", "100")
+	t.Setenv("HOOKRAIL_RL_TTL_FLOOR_S", "120")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RLTimeout != 100*time.Millisecond {
+		t.Fatalf("RLTimeout = %v", c.RLTimeout)
+	}
+	if c.RLTTLFloor != 120*time.Second {
+		t.Fatalf("RLTTLFloor = %v", c.RLTTLFloor)
+	}
+}

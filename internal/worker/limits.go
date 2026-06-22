@@ -27,24 +27,25 @@ type EndpointLimits struct {
 func (e *EndpointLimits) Run(ctx context.Context) {
 	t := time.NewTicker(e.Interval)
 	defer t.Stop()
-	e.Refresh(ctx)
+	_ = e.Refresh(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			e.Refresh(ctx)
+			_ = e.Refresh(ctx)
 		}
 	}
 }
 
 // Refresh pulls current per-endpoint limits and reconciles the registry. Exported
-// so tests can drive one cycle deterministically.
-func (e *EndpointLimits) Refresh(ctx context.Context) {
+// so tests can drive one cycle deterministically. Returns an error only when the
+// store call fails (callers in main may fail boot on first load).
+func (e *EndpointLimits) Refresh(ctx context.Context) error {
 	limits, err := e.Store.EndpointRateLimits(ctx)
 	if err != nil {
 		slog.Warn("endpoint limits refresh failed; keeping previous", "err", err)
-		return
+		return err
 	}
 
 	// Build the global snapshot + update the fallback registry.
@@ -79,7 +80,7 @@ func (e *EndpointLimits) Refresh(ctx context.Context) {
 		}
 		e.applied = next
 		e.Global.SetSnapshot(m)
-		return
+		return nil
 	}
 
 	// Pure-local path (no GlobalLimiter configured): keep the existing behavior.
@@ -101,4 +102,5 @@ func (e *EndpointLimits) Refresh(ctx context.Context) {
 		}
 	}
 	e.applied = next
+	return nil
 }

@@ -37,6 +37,12 @@ type Config struct {
 
 	DrainDeadline       time.Duration // HOOKRAIL_DRAIN_DEADLINE, default 25s, validated < 30s
 	DrainRetryJitterMax time.Duration // HOOKRAIL_DRAIN_RETRY_JITTER_MAX, default 2s
+
+	// P2 global rate limiting (worker delivery path). Defaults to on when Redis
+	// is configured; set HOOKRAIL_GLOBAL_RATELIMIT=0 to disable.
+	GlobalRateLimit bool          // HOOKRAIL_GLOBAL_RATELIMIT (default true when RedisAddr != "")
+	RLTimeout       time.Duration // HOOKRAIL_RL_TIMEOUT_MS, default 50ms
+	RLTTLFloor      time.Duration // HOOKRAIL_RL_TTL_FLOOR_S, default 60s
 }
 
 func Load() (Config, error) {
@@ -156,6 +162,29 @@ func Load() (Config, error) {
 			perr = fmt.Errorf("HOOKRAIL_DRAIN_RETRY_JITTER_MAX must be a positive Go duration (got %q)", v)
 		} else {
 			c.DrainRetryJitterMax = d
+		}
+	}
+	// Global rate limiting (P2): defaults on when Redis is configured.
+	c.GlobalRateLimit = c.RedisAddr != ""
+	if v := os.Getenv("HOOKRAIL_GLOBAL_RATELIMIT"); v != "" {
+		c.GlobalRateLimit = v != "0" && v != "false"
+	}
+	c.RLTimeout = 50 * time.Millisecond
+	if v := os.Getenv("HOOKRAIL_RL_TIMEOUT_MS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			perr = fmt.Errorf("HOOKRAIL_RL_TIMEOUT_MS must be a positive integer (milliseconds)")
+		} else {
+			c.RLTimeout = time.Duration(n) * time.Millisecond
+		}
+	}
+	c.RLTTLFloor = 60 * time.Second
+	if v := os.Getenv("HOOKRAIL_RL_TTL_FLOOR_S"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			perr = fmt.Errorf("HOOKRAIL_RL_TTL_FLOOR_S must be a positive integer (seconds)")
+		} else {
+			c.RLTTLFloor = time.Duration(n) * time.Second
 		}
 	}
 	if perr != nil {

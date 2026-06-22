@@ -55,7 +55,7 @@ func TestEndpointLimitsRevertsRemoved(t *testing.T) {
 
 	reg := ratelimit.NewRegistry(1000, 2000)
 	el := &worker.EndpointLimits{Store: s, Registry: reg, Interval: time.Hour, DefaultRate: 1000, DefaultBurst: 2000}
-	el.Refresh(ctx) // applies the 1 rps / burst 2 override for epID
+	_ = el.Refresh(ctx) // applies the 1 rps / burst 2 override for epID
 
 	// throttled to ~1 rps: burst 2 allowed at t0, third denied (no time elapsed)
 	t0 := time.Now()
@@ -67,7 +67,7 @@ func TestEndpointLimitsRevertsRemoved(t *testing.T) {
 	}
 	// remove the only limiting sub, refresh → bucket reverts to the 1000 default.
 	_ = s.SoftDeleteSubscription(ctx, subID)
-	el.Refresh(ctx)
+	_ = el.Refresh(ctx)
 	// advance 1s so the reverted 1000 rps bucket accrues ~1000 tokens (capped at
 	// the 2000 burst); the old 1 rps bucket would only accrue 1 in the same second.
 	t1 := t0.Add(time.Second)
@@ -94,7 +94,7 @@ func TestEndpointLimitsLowRateStillDelivers(t *testing.T) {
 
 	reg := ratelimit.NewRegistry(1000, 2000)
 	el := &worker.EndpointLimits{Store: s, Registry: reg, Interval: time.Hour, DefaultRate: 1000, DefaultBurst: 2000}
-	el.Refresh(ctx)
+	_ = el.Refresh(ctx)
 
 	if !reg.Allow(epID, time.Now()) {
 		t.Fatal("a 0.1 rps endpoint must deliver at least once (burst floored to 1); delivery would stall forever otherwise")
@@ -118,7 +118,7 @@ func TestRefreshBuildsGlobalSnapshot(t *testing.T) {
 		Global: g, Fallback: g.FallbackForTest(),
 		Interval: time.Hour, DefaultRate: 1000, DefaultBurst: 2000,
 	}
-	el.Refresh(ctx)
+	_ = el.Refresh(ctx)
 	if !g.Has(epID) {
 		t.Fatal("override endpoint must be in the global snapshot")
 	}
@@ -142,7 +142,7 @@ func TestRefreshRemovesDroppedOverride(t *testing.T) {
 		Global: g, Fallback: fb,
 		Interval: time.Hour, DefaultRate: 1000, DefaultBurst: 2000,
 	}
-	el.Refresh(ctx)
+	_ = el.Refresh(ctx)
 	if !g.Has(epID) {
 		t.Fatal("override endpoint must be in the global snapshot before removal")
 	}
@@ -150,7 +150,7 @@ func TestRefreshRemovesDroppedOverride(t *testing.T) {
 	if err := s.SoftDeleteSubscription(ctx, subID); err != nil {
 		t.Fatal(err)
 	}
-	el.Refresh(ctx)
+	_ = el.Refresh(ctx)
 	if g.Has(epID) {
 		t.Fatal("removed override must NOT be in the global snapshot (routes back to local default)")
 	}

@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/mit112/hookrail/internal/backoff"
 	"github.com/mit112/hookrail/internal/config"
@@ -60,6 +62,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Dedicated Redis client for the global rate limiter (P2).
+	// Separate from the queue client so blocking XREADGROUP does not
+	// head-of-line-block limiter EVAL calls.
+	var rlClient *redis.Client
+	if cfg.GlobalRateLimit {
+		var rlOpts *redis.Options
+		if strings.HasPrefix(cfg.RedisAddr, "redis://") {
+			var err error
+			rlOpts, err = redis.ParseURL(cfg.RedisAddr)
+			if err != nil {
+				slog.Error("limiter redis parse", "err", err)
+				os.Exit(1)
+			}
+		} else {
+			rlOpts = &redis.Options{Addr: cfg.RedisAddr}
+		}
+		rlOpts.PoolSize = 8
+		rlOpts.ReadTimeout = 200 * time.Millisecond
+		rlOpts.WriteTimeout = 200 * time.Millisecond
+		rlClient = redis.NewClient(rlOpts)
+		defer func() { _ = rlClient.Close() }()
+	}
+
 	prefixes, err := cfg.AllowPrefixes()
 	if err != nil {
 		slog.Error("config", "err", err)
@@ -73,7 +98,25 @@ func main() {
 	defRPS := envFloat("HOOKRAIL_DEFAULT_RPS", 1000)
 	defBurst := envFloat("HOOKRAIL_DEFAULT_BURST", 2000)
 	limits := ratelimit.NewRegistry(defRPS, defBurst)
-	el := &worker.EndpointLimits{Store: s, Registry: limits, Interval: 15 * time.Second, DefaultRate: defRPS, DefaultBurst: defBurst}
+	var global *ratelimit.GlobalLimiter
+	var fb *ratelimit.Registry
+	if cfg.GlobalRateLimit {
+		fb = ratelimit.NewRegistry(defRPS, defBurst)
+		rl := ratelimit.NewRedisLimiter(rlClient, cfg.RLTTLFloor)
+		global = ratelimit.NewGlobalLimiter(rl, fb, cfg.RLTimeout)
+	}
+	el := &worker.EndpointLimits{
+		Store: s, Registry: limits,
+		Global: global, Fallback: fb,
+		Interval: 15 * time.Second,
+		DefaultRate: defRPS, DefaultBurst: defBurst,
+	}
+	if global != nil {
+		if err := el.Refresh(intakeCtx); err != nil {
+			slog.Error("initial rate-limit snapshot load failed; refusing to start in global mode", "err", err)
+			os.Exit(1)
+		}
+	}
 	go el.Run(intakeCtx)
 	go func() {
 		mux := http.NewServeMux()
@@ -96,6 +139,7 @@ func main() {
 			Store: s, Queue: q,
 			Client: ssrf.NewHTTPClient(pol), Policy: pol,
 			Backoff: backoff.Default(), Limits: limits,
+			Global:    global,
 			MasterKey: cfg.MasterKey, Lease: 30 * time.Second,
 			Consumer: hostConsumer(host, i),
 			InFlight: tracker,
