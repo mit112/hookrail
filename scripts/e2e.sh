@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 COMPOSE="docker compose -f deploy/compose/docker-compose.yml"
 export HOOKRAIL_MASTER_KEY="${HOOKRAIL_MASTER_KEY:-000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f}"
 
-$COMPOSE up -d --build
+$COMPOSE up -d --build --scale api=2 --scale worker=2
 trap '$COMPOSE down -v' EXIT
 
 # wait for the API
