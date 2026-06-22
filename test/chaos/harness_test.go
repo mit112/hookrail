@@ -484,3 +484,42 @@ func WaitCounterAbove(ctx context.Context, promURL, query string, base float64, 
 	}
 	return last, fmt.Errorf("counter %q never rose above %v within %s (last=%v)", query, base, deadline, last)
 }
+
+// CountDue returns the number of deliveries matching the DueDeliveryIDs predicate —
+// the exact set the sweeper would republish on its next pass.
+func CountDue(ctx context.Context, dsn string) (int, error) {
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var count int
+	err = conn.QueryRow(ctx, `
+		SELECT count(*) FROM deliveries
+		WHERE ((state IN ('pending','retry_scheduled') AND next_attempt_at <= now())
+		   OR (state = 'in_flight' AND lease_until < now()))
+		  AND (ordering_key IS NULL OR EXISTS (
+		      SELECT 1 FROM ordered_key_state oks
+		      WHERE oks.subscription_id = deliveries.subscription_id
+		        AND oks.ordering_key    = deliveries.ordering_key
+		        AND oks.cursor_seq      = deliveries.ordering_seq))
+	`).Scan(&count)
+	return count, err
+}
+
+// WaitDue polls until at least min deliveries match the DueDeliveryIDs predicate.
+func WaitDue(ctx context.Context, dsn string, min int, deadline time.Duration) (int, error) {
+	var last int
+	until := time.Now().Add(deadline)
+	for time.Now().Before(until) {
+		c, err := CountDue(ctx, dsn)
+		if err == nil {
+			last = c
+			if c >= min {
+				return c, nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return last, fmt.Errorf("due count never reached %d within %s (last=%d)", min, deadline, last)
+}

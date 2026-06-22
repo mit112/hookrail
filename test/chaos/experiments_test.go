@@ -351,6 +351,110 @@ func TestHarnessScaleAndKillLeader(t *testing.T) {
 	t.Fatal("standby scheduler never became leader after KillLeader within 30s")
 }
 
+// E6: leader scheduler failover — kill the leader, the standby sweeps the
+// backstop backlog, nothing stranded.
+func TestExperimentLeaderFailover(t *testing.T) {
+	c := NewCompose()
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if err := c.Down(context.Background()); err != nil {
+			t.Errorf("teardown: %v", err)
+		}
+		if out, _ := c.PS(context.Background()); len(trimTrailing(out)) != 0 {
+			t.Errorf("containers leaked after down -v:\n%s", out)
+		}
+	})
+
+	// Bring up scheduler=2, worker=2 for multi-replica HA.
+	if err := c.Up(ctx, map[string]int{"scheduler": 2, "worker": 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WaitReady(ctx, apiURL+"/readyz"); err != nil {
+		t.Fatal(err)
+	}
+	inj := NewInjector(c)
+
+	// Use the slow handler so workers don't instantly drain the backlog.
+	key, err := Seed(ctx, c, slowURL, "chaos-e6.*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := &Load{APIURL: apiURL, Key: key, Topic: "chaos-e6.evt"}
+
+	// Post a burst. These deliveries are pending in PG — the initial sweep already
+	// ran on an empty DB, so nothing published them to Redis. Workers are idle.
+	const n = 200
+	accepted, err := load.Burst(ctx, n)
+	if err != nil || accepted != n {
+		t.Fatalf("burst accepted %d/%d: %v", accepted, n, err)
+	}
+
+	// Prove non-vacuity: there must be due deliveries that only the sweeper can
+	// publish to Redis. Without the leader, these would strand forever.
+	preDue, err := WaitDue(ctx, dsn, 1, 30*time.Second)
+	if err != nil {
+		t.Fatalf("no due deliveries to sweep (vacuous): %v", err)
+	}
+	if preDue == 0 {
+		t.Fatal("preDue must be > 0 — no backstop backlog to fail over (vacuous)")
+	}
+
+	preDB, _ := FetchDB(ctx, dsn)
+	preInFlight := preDB.InFlight
+	base, _ := FetchCounter(ctx, promURL, "hookrail_sweeper_republished_total")
+	t.Logf("pre-kill: due=%d in-flight=%d sweeper_base=%v", preDue, preInFlight, base)
+
+	// Stop workers FIRST so they stop consuming the Redis stream. Without this,
+	// the original leader already published all delivery IDs to Redis and workers
+	// consume them — the standby sweeper has nothing to publish and the counter
+	// never advances, making the oracle vacuous. By stopping workers we guarantee
+	// the standby sweeper finds a backstop to republish.
+	if err := inj.Kill(ctx, "worker"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Kill the leader scheduler container.
+	if err := inj.KillLeader(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// (a) Surviving scheduler reports leader within a bound.
+	dl := time.Now().Add(30 * time.Second)
+	promoted := false
+	for time.Now().Before(dl) {
+		v, err := FetchCounter(ctx, promURL, "hookrail_scheduler_is_leader")
+		if err == nil && v >= 1.0 {
+			t.Logf("standby promoted: is_leader=%v", v)
+			promoted = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !promoted {
+		t.Fatal("standby scheduler never became leader after KillLeader within 30s")
+	}
+
+	// (b) Sweeper counter advances — the new leader republishes the backlog.
+	if _, err := WaitCounterAbove(ctx, promURL, "hookrail_sweeper_republished_total", base, 2*time.Minute); err != nil {
+		t.Fatalf("sweeper never republished post-failover: %v", err)
+	}
+
+	// Restart workers so they can drain the republished backlog.
+	if err := inj.Start(ctx, "worker"); err != nil {
+		t.Fatal(err)
+	}
+
+	// (c)+(d) Every accepted delivery eventually delivered; duplicates bounded by
+	// in-flight count at kill time + slack.
+	dupBound := preInFlight + 10
+	snap, err := PollRecovered(ctx, recvURL, dsn, accepted, dupBound, 4*time.Minute)
+	if err != nil {
+		t.Fatalf("not recovered: %v", err)
+	}
+	t.Logf("recovered (leader failover): succeeded=%d distinct=%d dups=%d (bound %d)",
+		snap.DB.Succeeded, snap.Stats.Distinct, snap.Stats.Duplicates, dupBound)
+}
+
 // fetchOrderedStats calls GET /ordered-stats on the test-receiver.
 func fetchOrderedStats(ctx context.Context, recvURL string) map[string][]int {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, recvURL+"/ordered-stats", nil)
