@@ -35,7 +35,7 @@ func setupStack(t *testing.T) (*Compose, *Injector) {
 			t.Errorf("containers leaked after down -v:\n%s", out)
 		}
 	})
-	if err := c.Up(ctx); err != nil {
+	if err := c.Up(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.WaitReady(ctx, apiURL+"/readyz"); err != nil {
@@ -308,6 +308,47 @@ func TestExperimentOrderedNoReorder(t *testing.T) {
 		}
 	}
 	t.Logf("ordered oracle: %d keys × %d seqs all strictly monotonic, no gaps, no dupes", K, M)
+}
+
+// TestHarnessScaleAndKillLeader validates the harness primitives that E6 depends on:
+// compose scale (multiple scheduler replicas) and leader-targeted SIGKILL.
+func TestHarnessScaleAndKillLeader(t *testing.T) {
+	c := NewCompose()
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if err := c.Down(context.Background()); err != nil {
+			t.Errorf("teardown: %v", err)
+		}
+		if out, _ := c.PS(context.Background()); len(trimTrailing(out)) != 0 {
+			t.Errorf("containers leaked after down -v:\n%s", out)
+		}
+	})
+	// Bring up scheduler=2 so we have a leader + standby to fail over.
+	if err := c.Up(ctx, map[string]int{"scheduler": 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WaitReady(ctx, apiURL+"/readyz"); err != nil {
+		t.Fatal(err)
+	}
+	inj := NewInjector(c)
+
+	// Kill the leader container; the standby must report leader shortly after.
+	if err := inj.KillLeader(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Prove the standby promoted: is_leader gauge reads 1 within a bound.
+	deadline := time.Now().Add(30 * time.Second)
+	promQuery := "hookrail_scheduler_is_leader"
+	for time.Now().Before(deadline) {
+		v, err := FetchCounter(ctx, promURL, promQuery)
+		if err == nil && v >= 1.0 {
+			t.Logf("standby promoted: is_leader=%v", v)
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("standby scheduler never became leader after KillLeader within 30s")
 }
 
 // fetchOrderedStats calls GET /ordered-stats on the test-receiver.

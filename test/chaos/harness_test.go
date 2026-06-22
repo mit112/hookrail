@@ -52,8 +52,12 @@ func (c *Compose) docker(ctx context.Context, args ...string) ([]byte, error) {
 	return out.Bytes(), err
 }
 
-func (c *Compose) Up(ctx context.Context) error {
-	if b, err := c.docker(ctx, c.base("up", "-d", "--build")...); err != nil {
+func (c *Compose) Up(ctx context.Context, scale map[string]int) error {
+	args := []string{"up", "-d", "--build"}
+	for svc, count := range scale {
+		args = append(args, "--scale", fmt.Sprintf("%s=%d", svc, count))
+	}
+	if b, err := c.docker(ctx, c.base(args...)...); err != nil {
 		return fmt.Errorf("compose up: %w\n%s", err, b)
 	}
 	return nil
@@ -129,6 +133,35 @@ func (i *Injector) Unpause(ctx context.Context, svc string) error {
 	return i.compose(ctx, "unpause", svc)
 }
 func (i *Injector) Start(ctx context.Context, svc string) error { return i.compose(ctx, "start", svc) }
+
+// KillLeader finds the scheduler container reporting hookrail_scheduler_is_leader 1
+// by scraping /metrics inside each container (port 8083 is NOT exposed on the host),
+// then SIGKILLs exactly that container.
+func (i *Injector) KillLeader(ctx context.Context) error {
+	// Get all scheduler container IDs.
+	out, err := i.C.docker(ctx, i.C.base("ps", "-q", "scheduler")...)
+	if err != nil {
+		return fmt.Errorf("ps scheduler: %w\n%s", err, out)
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return fmt.Errorf("no scheduler containers found")
+	}
+	for _, id := range ids {
+		metrics, err := i.C.docker(ctx, "exec", id, "wget", "-qO-", "http://localhost:8083/metrics")
+		if err != nil {
+			continue // container may be transient; try next
+		}
+		if strings.Contains(string(metrics), "hookrail_scheduler_is_leader 1") {
+			_, err := i.C.docker(ctx, "kill", id)
+			if err != nil {
+				return fmt.Errorf("kill leader container %s: %w", id, err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("no scheduler container reporting leader found among %d containers", len(ids))
+}
 
 // ---- Load driver ---------------------------------------------------------
 
