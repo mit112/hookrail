@@ -211,6 +211,35 @@ three experiments on `main`. Validate the dashboards with `make dash-verify`. Th
 curated Grafana boards (`overview`, `resilience`) provision automatically with
 `make up` at <http://localhost:3000>.
 
+## High Availability (app tier)
+
+The relay app tier (api, worker, scheduler, admin, dashboard) runs at N ≥ 2
+replicas for zero-downtime deploys and single-replica failure tolerance.
+
+- **Scheduler leader election.** Only one scheduler replica sweeps at a time,
+  elected via a Postgres session-scoped advisory lock (key `0x484b0000`) held on
+  a standalone connection. Ownership is verified against `pg_locks` before each
+  cycle — not just liveness. Standby schedulers serve `/metrics` and readiness
+  probes but never sweep or reconcile.
+- **Worker graceful drain.** On SIGTERM a worker stops consuming new deliveries
+  (`XREADGROUP`), finishes in-flight HTTP attempts, then releases any remaining
+  claimed deliveries to `retry_scheduled` via a fenced `claim_version` CAS. A
+  reserve-before-claim tracker closes the race between a claim-in-progress and
+  the drain fence, guaranteeing every straggler is released within the
+  configured `HOOKRAIL_DRAIN_DEADLINE`.
+- **Per-replica rate limiting.** The `rate_limit_rps` cap is enforced
+  independently by each worker replica. With N workers the effective rate can
+  reach N × `rate_limit_rps`. True global (distributed) rate limiting is
+  deferred.
+- **Datastore and Cloudflare Tunnel remain single-instance.** Postgres and Redis
+  each run at `replicas: 1` — data-tier HA is out of scope for this release. The
+  Cloudflare Tunnel (`cloudflared`) is bumped to 2 replicas in the prod overlay
+  but the live cutover remains an attended procedure. Multi-node k3s and
+  datastore HA are deferred to a future slice.
+
+Operational notes (PgBouncer incompatibility, drain timeout, rate-limit
+disclosure): see [docs/deploy/k3s.md](docs/deploy/k3s.md).
+
 ## Security
 
 Hookrail POSTs to user-supplied URLs — it is an SSRF machine without defenses, so

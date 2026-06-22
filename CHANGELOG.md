@@ -15,6 +15,7 @@ Opt-in strict-FIFO per-key ordering with pause-on-dead-letter, skip, backlog cap
 - **`GET /v1/ordered-keys?blocked=true`:** list blocked keys with backlog and successor age.
 - **Backlog cap:** `HOOKRAIL_ORDERED_KEY_BACKLOG_MAX` (default 10000) per key; 429 + `Retry-After` when exceeded.
 - **Chaos-proven:** zero-reorder oracle (E5) under worker kill — 3× deterministic passes.
+- **App-tier HA:** scheduler leader election via PG advisory lock; worker graceful drain with reserve-before-claim tracker; per-replica rate-limit disclosure; 2-replica manifests with PDBs, anti-affinity, and preStop hooks; chaos-proven leader-failover oracle (E6).
 - Unordered delivery path is unchanged.
 
 ## [P1]

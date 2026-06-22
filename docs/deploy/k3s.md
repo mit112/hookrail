@@ -175,9 +175,12 @@ curl -s --connect-timeout 5 http://<k3s-node-ip>:8082/healthz || echo "blocked (
 
 ## 12. Residual risks (before future hardening)
 
-- **Single-node.** The full stack (Postgres, Redis, all 5 app Deployments, OTel,
-  Prometheus, Jaeger, cloudflared) runs on one k3s node. Node failure takes
-  everything down. Multi-node and HA are deferred to a future slice.
+- **App-tier HA, data-tier single-node.** The relay app tier (api, worker,
+  scheduler, admin, dashboard) now runs at 2 replicas with scheduler leader
+  election and worker graceful drain — see the README HA section. However,
+  Postgres, Redis, OTel, Prometheus, Jaeger, and cloudflared each run as a
+  single pod. Node failure still takes the data tier down. Multi-node k3s and
+  datastore HA are deferred to a future slice.
 - **Cloudflare Tunnel dependency.** Public access depends on the Cloudflare edge
   and the `cloudflared` Deployment (the tunnel runs as its own standalone
   Deployment, not a sidecar). A Cloudflare outage or tunnel disruption makes
@@ -196,6 +199,14 @@ curl -s --connect-timeout 5 http://<k3s-node-ip>:8082/healthz || echo "blocked (
 - **Unbounded observability retention.** Prometheus and Jaeger use emptyDir
   storage (no PVC). Data is lost on pod restart. Persistent, size-capped
   observability storage is deferred.
+- **PgBouncer / transaction-pooling incompatible.** The scheduler leader
+  election holds a Postgres **session**-scoped advisory lock on a standalone
+  `pgx.Conn`. PgBouncer in transaction-pooling mode assigns a different backend
+  on each statement, breaking session-lock semantics. Use **direct PG
+  connections or session-pooling only** — never transaction-pooling.
+- **Per-replica rate limiting.** Each worker replica enforces `rate_limit_rps`
+  independently. With N worker replicas the effective per-endpoint rate can
+  reach N × `rate_limit_rps`. True global rate limiting is deferred.
 - **No PodSecurity / backup.** The namespace has no PodSecurity admission
   (restricted) and there is no automated Postgres backup. Both are deferred to a
   future slice.
