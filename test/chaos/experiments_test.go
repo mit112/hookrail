@@ -18,7 +18,7 @@ const (
 	apiURL     = "http://localhost:8080"
 	recvURL    = "http://localhost:9090"
 	promURL    = "http://localhost:9091"
-	dsn        = "postgres://hookrail:hookrail@localhost:5432/hookrail?sslmode=disable"
+	dsn        = "postgres://hookrail:hookrail@localhost:5432/hookrail?sslmode=disable" //nolint:gosec
 	succeedURL = "http://test-receiver:9090/succeed"
 	slowURL    = "http://test-receiver:9090/slow-body" // holds deliveries in-flight ~5s
 )
@@ -449,6 +449,118 @@ func TestExperimentLeaderFailover(t *testing.T) {
 	}
 	t.Logf("recovered (leader failover): succeeded=%d distinct=%d dups=%d (bound %d)",
 		snap.DB.Succeeded, snap.Stats.Distinct, snap.Stats.Duplicates, dupBound)
+}
+
+// E_RL: degrade the dedicated limiter connection while the queue path stays
+// healthy. Assert fail-open liveness (deliveries continue, mode=failopen
+// appears) and cap re-enforcement after recovery.
+func TestChaos_E_RL_LimiterFailOpenAndRecover(t *testing.T) {
+	c, _ := setupStack(t,
+		WithScale("worker", 2),
+		WithEnv("HOOKRAIL_RL_REDIS_ADDR", "toxiproxy:8479"),
+		WithEnv("HOOKRAIL_LIMITS_REFRESH_INTERVAL", "1s"),
+	)
+	ctx := context.Background()
+
+	// Wait for toxiproxy to be ready, then create the limiter proxy
+	// so the dedicated limiter client (pointed at toxiproxy:8479)
+	// can reach Redis through it.
+	if err := c.WaitReady(ctx, toxiproxyURL+"/proxies"); err != nil {
+		t.Fatalf("toxiproxy not ready: %v", err)
+	}
+	if err := setupLimiterProxy(ctx); err != nil {
+		t.Fatalf("setup limiter proxy: %v", err)
+	}
+
+	// Seed a rate-limited endpoint (20 rps override).
+	sr, err := SeedWithRPS(ctx, c, 20.0, slowURL, "chaos-rl.*")
+	if err != nil {
+		t.Fatalf("seed with rps: %v", err)
+	}
+	load := &Load{APIURL: apiURL, Key: sr.ProducerKey, Topic: "chaos-rl.evt"}
+
+	// Saturate demand so the cap is genuinely exercised.
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	for i := 0; i < 4; i++ {
+		go func() {
+			for sctx.Err() == nil {
+				_, _ = load.Post(sctx)
+			}
+		}()
+	}
+
+	// Prove the global cap is active and denying before we cut.
+	if _, err := waitDenials(ctx, "global", 30*time.Second); err != nil {
+		t.Fatalf("global cap never engaged: %v", err)
+	}
+
+	// Cut the limiter connection (queue Redis stays healthy).
+	if err := cutLimiter(ctx); err != nil {
+		t.Fatalf("cut limiter: %v", err)
+	}
+
+	// Liveness: deliveries must keep flowing while limiter is down.
+	before, err := FetchDB(ctx, dsn)
+	if err != nil {
+		t.Fatalf("fetch db before cut: %v", err)
+	}
+	time.Sleep(5 * time.Second)
+	after, err := FetchDB(ctx, dsn)
+	if err != nil {
+		t.Fatalf("fetch db after cut: %v", err)
+	}
+	if after.Total <= before.Total {
+		t.Fatalf("fail-open liveness: deliveries must continue while limiter is down (before=%d after=%d)", before.Total, after.Total)
+	}
+	t.Logf("fail-open liveness: before=%d after=%d", before.Total, after.Total)
+
+	// Prove mode=failopen is active during the cut.
+	m, err := scrapeRatelimit(ctx)
+	if err != nil {
+		t.Fatalf("scrape ratelimit: %v", err)
+	}
+	if m.FailOpen == 0 {
+		t.Fatal("expected mode=failopen during the cut")
+	}
+	t.Logf("cut active: failopen=%d deniedGlobal=%d", m.FailOpen, m.DeniedGlobal)
+
+	// Restore the limiter connection.
+	if err := restoreLimiter(ctx); err != nil {
+		t.Fatalf("restore limiter: %v", err)
+	}
+
+	// Wait for recovery: breaker cooldown (15s) + refresh interval (1s).
+	time.Sleep(20 * time.Second)
+
+	// Recovery: failopen must stop growing.
+	fo1, err := failopenCount(ctx)
+	if err != nil {
+		t.Fatalf("failopen count after recovery: %v", err)
+	}
+	time.Sleep(5 * time.Second)
+	fo2, err := failopenCount(ctx)
+	if err != nil {
+		t.Fatalf("failopen count: %v", err)
+	}
+	if fo2 != fo1 {
+		t.Fatalf("failopen must stop growing after recovery: %d -> %d", fo1, fo2)
+	}
+	t.Logf("recovery: failopen stable at %d", fo1)
+
+	// Cap re-enforced: a fresh saturated window is bounded.
+	admitted, err := countAttemptsInWindow(ctx, sr.EndpointID, 5*time.Second)
+	if err != nil {
+		t.Fatalf("count window: %v", err)
+	}
+	const rate = 20.0
+	const burst = 40.0 // 2*rps
+	const epsilon = 15
+	upper := rate*5 + burst + epsilon
+	if float64(admitted) > upper {
+		t.Fatalf("cap not re-enforced after recovery: admitted=%d > upper=%.0f", admitted, upper)
+	}
+	t.Logf("cap re-enforced: admitted=%d upper=%.0f", admitted, upper)
 }
 
 // fetchOrderedStats calls GET /ordered-stats on the test-receiver.

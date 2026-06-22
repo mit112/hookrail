@@ -51,7 +51,7 @@ services:
 
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.9.0
-    command: ["toxiproxy-server", "-host=0.0.0.0"]
+    command: ["-host=0.0.0.0"]
     ports: ["8474:8474"]
     depends_on:
       redis: { condition: service_healthy }

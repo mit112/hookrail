@@ -16,3 +16,4 @@ run:
   build-tags:
     - integration
     - e2e
+    - chaos

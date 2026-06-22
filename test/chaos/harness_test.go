@@ -1,3 +1,5 @@
+//go:build chaos
+
 package chaos
 
 import (
@@ -8,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -73,7 +76,7 @@ func (c *Compose) docker(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (c *Compose) Up(ctx context.Context, scale map[string]int) error {
-	args := []string{"up", "-d", "--build"}
+	args := []string{"up", "-d"}
 	merged := map[string]int{}
 	for k, v := range c.scale {
 		merged[k] = v
@@ -122,12 +125,12 @@ func (c *Compose) WaitReady(ctx context.Context, url string) error {
 	return fmt.Errorf("stack not ready at %s after 120s", url)
 }
 
-const toxiproxyURL = "http://localhost:8474" //nolint:unused
+const toxiproxyURL = "http://localhost:8474"
 
 // setupLimiterProxy creates a toxiproxy named "redis-rl" that forwards to
 // redis:6379.  Must be called after the stack is up and before the worker
 // starts issuing limiter commands.
-func setupLimiterProxy(ctx context.Context) error { //nolint:unused
+func setupLimiterProxy(ctx context.Context) error {
 	body := `{"name":"redis-rl","listen":"0.0.0.0:8479","upstream":"redis:6379"}`
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, toxiproxyURL+"/proxies",
 		strings.NewReader(body))
@@ -146,7 +149,7 @@ func setupLimiterProxy(ctx context.Context) error { //nolint:unused
 
 // cutLimiter adds a timeout toxic to the redis-rl proxy, causing all limiter
 // EVAL commands to fail while the queue Redis stays healthy.
-func cutLimiter(ctx context.Context) error { //nolint:unused
+func cutLimiter(ctx context.Context) error {
 	body := `{"name":"rl-cut","type":"timeout","attributes":{"timeout":1}}`
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
 		toxiproxyURL+"/proxies/redis-rl/toxics", strings.NewReader(body))
@@ -163,7 +166,7 @@ func cutLimiter(ctx context.Context) error { //nolint:unused
 }
 
 // restoreLimiter removes the rl-cut toxic so the limiter connection recovers.
-func restoreLimiter(ctx context.Context) error { //nolint:unused
+func restoreLimiter(ctx context.Context) error {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete,
 		toxiproxyURL+"/proxies/redis-rl/toxics/rl-cut", nil)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
@@ -325,19 +328,34 @@ func SeedOrdered(ctx context.Context, c *Compose, url, topic string) (string, er
 	return "", fmt.Errorf("no producer_key in seed output:\n%s", out)
 }
 
-func SeedWithRPS(ctx context.Context, c *Compose, rps float64, url, topic string) (string, error) {
-	args := []string{"hookrail-ctl", "seed", "-url", url, "-topic", topic, "-rps", fmt.Sprintf("%.2f", rps)}
+// SeedResult holds the IDs produced by a seed command.
+type SeedResult struct {
+	ProducerKey string
+	EndpointID  string
+}
+
+// SeedWithRPS creates a subscription with the given rate_limit_rps and returns both IDs.
+func SeedWithRPS(ctx context.Context, c *Compose, rps float64, urlStr, topic string) (SeedResult, error) {
+	args := []string{"hookrail-ctl", "seed", "-url", urlStr, "-topic", topic, "-rps", fmt.Sprintf("%.2f", rps)}
 	out, err := c.Run(ctx, "api", args...)
 	if err != nil {
-		return "", fmt.Errorf("seed with rps: %w\n%s", err, out)
+		return SeedResult{}, fmt.Errorf("seed with rps: %w\n%s", err, out)
 	}
+	var sr SeedResult
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	for sc.Scan() {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "producer_key="); ok {
-			return v, nil
+		line := strings.TrimSpace(sc.Text())
+		switch {
+		case strings.HasPrefix(line, "producer_key="):
+			sr.ProducerKey = strings.TrimPrefix(line, "producer_key=")
+		case strings.HasPrefix(line, "endpoint_id="):
+			sr.EndpointID = strings.TrimPrefix(line, "endpoint_id=")
 		}
 	}
-	return "", fmt.Errorf("no producer_key in seed output:\n%s", out)
+	if sr.EndpointID == "" {
+		return SeedResult{}, fmt.Errorf("no endpoint_id in seed output:\n%s", out)
+	}
+	return sr, nil
 }
 
 type Load struct {
@@ -629,4 +647,114 @@ func WaitCounterAbove(ctx context.Context, promURL, query string, base float64, 
 		time.Sleep(time.Second)
 	}
 	return last, fmt.Errorf("counter %q never rose above %v within %s (last=%v)", query, base, deadline, last)
+}
+
+// ---- Ratelimit metrics (E_RL chaos experiment) ---------------------------
+
+// RatelimitMetrics holds scraped ratelimit decision counters.
+type RatelimitMetrics struct {
+	DeniedGlobal int
+	FailOpen     int
+}
+
+// scrapeRatelimit reads ratelimit decision counters from Prometheus.
+func scrapeRatelimit(ctx context.Context) (RatelimitMetrics, error) {
+	var m RatelimitMetrics
+	var err error
+	q := `hookrail_ratelimit_decisions_total{result="denied",mode="global"}`
+	if m.DeniedGlobal, err = scrapeInt(ctx, q); err != nil {
+		return m, err
+	}
+	// failopen series may be absent in a healthy run -> treat as 0.
+	m.FailOpen, _ = scrapeInt(ctx, `hookrail_ratelimit_decisions_total{mode="failopen"}`)
+	return m, nil
+}
+
+// failopenCount returns the current failopen counter value.
+func failopenCount(ctx context.Context) (int, error) {
+	return scrapeInt(ctx, `hookrail_ratelimit_decisions_total{mode="failopen"}`)
+}
+
+// scrapeInt fetches a Prometheus gauge and returns it as int.
+func scrapeInt(ctx context.Context, query string) (int, error) {
+	u := promURL + "/api/v1/query?query=" + url.QueryEscape(query)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Data struct {
+			Result []struct {
+				Value [2]any `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, err
+	}
+	total := 0.0
+	for _, r := range out.Data.Result {
+		if s, ok := r.Value[1].(string); ok {
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				total += f
+			}
+		}
+	}
+	return int(total), nil
+}
+
+// waitDenials blocks until at least one denied decision in the given mode
+// is observed, proving the cap is genuinely active+binding.
+func waitDenials(ctx context.Context, mode string, deadline time.Duration) (int, error) {
+	q := fmt.Sprintf(`hookrail_ratelimit_decisions_total{result="denied",mode=%q}`, mode)
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		if v, err := scrapeInt(ctx, q); err == nil && v > 0 {
+			return v, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("no denied decisions in mode=%s within %s", mode, deadline)
+}
+
+// ---- DB helpers for E_RL ------------------------------------------------
+
+// dbNow returns the database clock (Postgres).
+func dbNow(ctx context.Context) (time.Time, error) {
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var t time.Time
+	err = conn.QueryRow(ctx, `SELECT now()`).Scan(&t)
+	return t, err
+}
+
+// countAttemptsInWindow counts delivery_attempts for an endpoint in [now, now+window).
+func countAttemptsInWindow(ctx context.Context, endpointID string, window time.Duration) (int, error) {
+	t0, err := dbNow(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("db now: %w", err)
+	}
+	time.Sleep(window)
+	t1, err := dbNow(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("db now: %w", err)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var count int
+	err = conn.QueryRow(ctx,
+		`SELECT count(*) FROM delivery_attempts da
+		 JOIN deliveries d ON d.id = da.delivery_id
+		 WHERE d.endpoint_id=$1
+		   AND da.requested_at >= $2 AND da.requested_at < $3`,
+		endpointID, t0, t1).Scan(&count)
+	return count, err
 }

@@ -24,7 +24,9 @@ internal/dashboard/dist/*
 /hookrail-api
 /hookrail-ctl
 /hookrail-dashboard
+/hookrail-scheduler
 /hookrail-worker
+/test-receiver
 
 # local-only explainer doc (kept on disk, not committed)
 docs/hookrail-explained.md
