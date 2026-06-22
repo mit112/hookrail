@@ -43,6 +43,10 @@ type Config struct {
 	GlobalRateLimit bool          // HOOKRAIL_GLOBAL_RATELIMIT (default true when RedisAddr != "")
 	RLTimeout       time.Duration // HOOKRAIL_RL_TIMEOUT_MS, default 50ms
 	RLTTLFloor      time.Duration // HOOKRAIL_RL_TTL_FLOOR_S, default 60s
+	// LimitsRefreshInterval controls how often the worker re-reads per-endpoint
+	// rate-limit overrides and republishes the global snapshot. Default 15s;
+	// lowered in integration tests so a freshly-seeded override propagates fast.
+	LimitsRefreshInterval time.Duration // HOOKRAIL_LIMITS_REFRESH_INTERVAL, default 15s
 }
 
 func Load() (Config, error) {
@@ -185,6 +189,15 @@ func Load() (Config, error) {
 			perr = fmt.Errorf("HOOKRAIL_RL_TTL_FLOOR_S must be a positive integer (seconds)")
 		} else {
 			c.RLTTLFloor = time.Duration(n) * time.Second
+		}
+	}
+	c.LimitsRefreshInterval = 15 * time.Second
+	if v := os.Getenv("HOOKRAIL_LIMITS_REFRESH_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			perr = fmt.Errorf("HOOKRAIL_LIMITS_REFRESH_INTERVAL must be a positive Go duration (e.g. 15s, 1s)")
+		} else {
+			c.LimitsRefreshInterval = d
 		}
 	}
 	if perr != nil {

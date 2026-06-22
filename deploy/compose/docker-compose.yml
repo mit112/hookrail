@@ -39,6 +39,11 @@ services:
       HOOKRAIL_MASTER_KEY: ${HOOKRAIL_MASTER_KEY}
       HOOKRAIL_ALLOW_HTTP: "true"            # compose-only: receiver is plain http (§8 dev mode)
       HOOKRAIL_ALLOW_CIDRS: "172.28.0.0/16"  # compose-only: in-network delivery (§8 allowlist mode)
+      # Pass-through (empty default = use the binary's built-in default) so the
+      # integration harness can flip the global limiter off and shorten the
+      # per-endpoint refresh interval without editing this file.
+      HOOKRAIL_GLOBAL_RATELIMIT: ${HOOKRAIL_GLOBAL_RATELIMIT:-}
+      HOOKRAIL_LIMITS_REFRESH_INTERVAL: ${HOOKRAIL_LIMITS_REFRESH_INTERVAL:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     depends_on:
       postgres: { condition: service_healthy }

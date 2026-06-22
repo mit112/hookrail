@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -37,8 +38,8 @@ type stackOpts struct {
 
 type StackOption func(*stackOpts)
 
-func WithWorkerScale(n int) StackOption   { return func(o *stackOpts) { o.workerScale = n } }
-func WithEnv(k, v string) StackOption     { return func(o *stackOpts) { o.env[k] = v } }
+func WithWorkerScale(n int) StackOption { return func(o *stackOpts) { o.workerScale = n } }
+func WithEnv(k, v string) StackOption   { return func(o *stackOpts) { o.env[k] = v } }
 
 // ---- Compose wrapper --------------------------------------------------------
 
@@ -164,10 +165,42 @@ func (l *Load) Burst(ctx context.Context, n int) int {
 	return accepted
 }
 
+// StartSaturation launches n goroutines that POST continuously until ctx is
+// cancelled. This keeps demand far above any per-endpoint cap for the whole
+// measurement, so the window is always saturated — the cap is genuinely
+// exercised and the admitted-count window can never be empty (the trailing
+// fixed-window approach went vacuous precisely because demand had drained).
+func (l *Load) StartSaturation(ctx context.Context, n int) {
+	for i := 0; i < n; i++ {
+		go func() {
+			for ctx.Err() == nil {
+				_ = l.Post(ctx)
+			}
+		}()
+	}
+}
+
 // ---- PG helpers -------------------------------------------------------------
 
-// CountAttemptsInWindow counts delivery_attempts for an endpoint within a duration.
-func CountAttemptsInWindow(ctx context.Context, endpointID string, window time.Duration) (int, error) {
+// DBNow returns the database clock. Both window bounds are taken from the DB so
+// the window is measured in the same clock domain that writes requested_at —
+// no host/container clock skew can shift the window.
+func DBNow(ctx context.Context) (time.Time, error) {
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var t time.Time
+	err = conn.QueryRow(ctx, `SELECT now()`).Scan(&t)
+	return t, err
+}
+
+// CountAttemptsBetween counts delivery_attempts for an endpoint whose
+// requested_at falls in [t0, t1). The window is anchored to DB-clock instants
+// captured around a saturated steady-state interval (not a trailing wall-clock
+// guess), so the measurement reflects the actual admit rate during the window.
+func CountAttemptsBetween(ctx context.Context, endpointID string, t0, t1 time.Time) (int, error) {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return 0, err
@@ -178,40 +211,73 @@ func CountAttemptsInWindow(ctx context.Context, endpointID string, window time.D
 		`SELECT count(*) FROM delivery_attempts da
 		 JOIN deliveries d ON d.id = da.delivery_id
 		 WHERE d.endpoint_id=$1
-		   AND da.requested_at >= now() - $2::interval`,
-		endpointID, fmt.Sprintf("%.0f seconds", window.Seconds())).Scan(&count)
+		   AND da.requested_at >= $2 AND da.requested_at < $3`,
+		endpointID, t0, t1).Scan(&count)
 	return count, err
 }
 
 // ---- Prometheus helpers -----------------------------------------------------
 
 type RatelimitMetrics struct {
-	DeniedGlobal int
-	FailOpen     int
+	DeniedGlobal int // result=denied,mode=global  (summed over ALL worker replicas)
+	DeniedLocal  int // result=denied,mode=local
+	FailOpen     int // mode=failopen (allowed+denied)
 }
 
-// ScrapeRatelimit reads ratelimit Prometheus metrics.
+// ScrapeRatelimit reads ratelimit decision counters summed across every worker
+// replica. fetchGauge sums all series the query returns, and prometheus.yml
+// discovers each worker via DNS A-records, so a decision on ANY worker is
+// counted — single-target scraping previously hid the other worker's
+// failopen/denied decisions and made the oracle vacuous.
 func ScrapeRatelimit(ctx context.Context) (RatelimitMetrics, error) {
 	var m RatelimitMetrics
-
-	v, err := fetchGauge(ctx, promURL, `hookrail_ratelimit_decisions_total{result="denied",mode="global"}`)
-	if err != nil {
+	var err error
+	if m.DeniedGlobal, err = scrapeSum(ctx, `hookrail_ratelimit_decisions_total{result="denied",mode="global"}`); err != nil {
 		return m, err
 	}
-	m.DeniedGlobal = int(v)
-
-	v, err = fetchGauge(ctx, promURL, `hookrail_ratelimit_decisions_total{result=~".*",mode="failopen"}`)
-	if err != nil {
-		// failopen may not exist yet (0) — treat as 0
-		m.FailOpen = 0
-	} else {
-		m.FailOpen = int(v)
+	if m.DeniedLocal, err = scrapeSum(ctx, `hookrail_ratelimit_decisions_total{result="denied",mode="local"}`); err != nil {
+		return m, err
 	}
+	// failopen series may be absent in a healthy run → treat absence as 0.
+	m.FailOpen, _ = scrapeSum(ctx, `hookrail_ratelimit_decisions_total{mode="failopen"}`)
 	return m, nil
 }
 
+func scrapeSum(ctx context.Context, query string) (int, error) {
+	v, err := fetchGauge(ctx, promURL, query)
+	return int(v), err
+}
+
+// WaitWorkerTargets blocks until Prometheus reports at least n UP worker
+// targets, so the oracle's cross-worker sums (and especially failopen==0) cover
+// every replica before any assertion runs.
+func WaitWorkerTargets(ctx context.Context, n int, deadline time.Duration) error {
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		if v, err := fetchGauge(ctx, promURL, `up{job="hookrail-worker"}`); err == nil && int(v) >= n {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("prometheus did not discover %d UP worker targets within %s", n, deadline)
+}
+
+// WaitDenials blocks until at least one denied decision in the given mode has
+// been observed, proving the cap is genuinely active+binding before measuring.
+func WaitDenials(ctx context.Context, mode string, deadline time.Duration) (int, error) {
+	q := fmt.Sprintf(`hookrail_ratelimit_decisions_total{result="denied",mode=%q}`, mode)
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		if v, err := fetchGauge(ctx, promURL, q); err == nil && int(v) > 0 {
+			return int(v), nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("no denied decisions in mode=%s within %s", mode, deadline)
+}
+
 func fetchGauge(ctx context.Context, baseURL, query string) (float64, error) {
-	u := baseURL + "/api/v1/query?query=" + query
+	u := baseURL + "/api/v1/query?query=" + url.QueryEscape(query)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {

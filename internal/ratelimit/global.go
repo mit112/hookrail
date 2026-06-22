@@ -42,9 +42,16 @@ func NewGlobalLimiter(rl *RedisLimiter, fallback *Registry, timeout time.Duratio
 	return NewGlobalLimiterWith(rl, fallback, timeout)
 }
 
-// SetSnapshot publishes a fresh override map. Immutable, atomically swapped.
+// SetSnapshot publishes a fresh override map. The map is cloned so the
+// published snapshot is immutable regardless of what the caller does with its
+// copy afterwards, and atomically swapped (copy-on-write — readers never see a
+// torn map).
 func (g *GlobalLimiter) SetSnapshot(m map[string]Limit) {
-	g.snap.Store(&m)
+	cp := make(map[string]Limit, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	g.snap.Store(&cp)
 }
 
 // Has reports whether the endpoint has a global override in the current
@@ -58,9 +65,24 @@ func (g *GlobalLimiter) Has(ep string) bool {
 	return ok
 }
 
-// Allow checks the global limiter for the endpoint; returns (allowed, mode)
-// where mode is "global" or "failopen".
-func (g *GlobalLimiter) Allow(ctx context.Context, ep string, now time.Time) (bool, string) {
+// Decide makes the rate-limit decision for one delivery with a SINGLE atomic
+// snapshot load (no torn Has()+Allow() race): a concurrent SetSnapshot can
+// never flip routing between the membership test and the decision.
+//
+//	handled=false → the endpoint has no global override; the caller must use
+//	                its local per-worker Registry (non-override path, unchanged).
+//	handled=true  → mode is "global" (Redis-backed decision) or "failopen"
+//	                (limiter-command failure / breaker open).
+//
+// FAIL-OPEN SCOPE (deliberate): on a limiter-COMMAND failure or an open breaker
+// the queue Redis is assumed healthy (whole-Redis-down is the separate queue-loss
+// path). We degrade to the per-worker local fallback bucket — NOT unconditional
+// admit. A rate limiter exists to protect the receiver, so the safe degradation
+// is "fall back to P1 per-worker limiting"; a fallback DENY releases the claim
+// and reschedules (no attempt consumed, never lost), so liveness holds while the
+// local bucket refills. Unconditionally admitting the whole backlog at a receiver
+// during a limiter blip would be the unsafe choice.
+func (g *GlobalLimiter) Decide(ctx context.Context, ep string, now time.Time) (handled, allowed bool, mode string) {
 	m := g.snap.Load()
 	var lim Limit
 	var ok bool
@@ -68,23 +90,34 @@ func (g *GlobalLimiter) Allow(ctx context.Context, ep string, now time.Time) (bo
 		lim, ok = (*m)[ep]
 	}
 	if !ok {
-		return g.fallback.Allow(ep, now), "failopen" // defensive: caller should gate on Has
+		return false, false, "" // not an override endpoint: caller uses local Registry
 	}
 	if g.br.open(now) {
-		return g.fallback.Allow(ep, now), "failopen"
+		return true, g.fallback.Allow(ep, now), "failopen"
 	}
 	cctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
-	allowed, err := g.rl.Allow(cctx, ep, lim.Rate, lim.Burst, now)
+	a, err := g.rl.Allow(cctx, ep, lim.Rate, lim.Burst, now)
 	if err != nil {
 		g.br.fail(now)
-		return g.fallback.Allow(ep, now), "failopen"
+		return true, g.fallback.Allow(ep, now), "failopen"
 	}
 	g.br.ok()
-	if allowed {
-		g.fallback.Allow(ep, now) // shadow-debit: keep the fallback warm
+	if a {
+		g.fallback.Allow(ep, now) // shadow-debit: keep the fallback warm for a future fail-open
 	}
-	return allowed, "global"
+	return true, a, "global"
+}
+
+// Allow is the legacy two-return shim retained for unit tests. Production code
+// routes through Decide. For an endpoint absent from the snapshot it preserves
+// the old defensive fail-open-to-fallback behavior.
+func (g *GlobalLimiter) Allow(ctx context.Context, ep string, now time.Time) (bool, string) {
+	handled, allowed, mode := g.Decide(ctx, ep, now)
+	if !handled {
+		return g.fallback.Allow(ep, now), "failopen"
+	}
+	return allowed, mode
 }
 
 // breaker is a simple consecutive-failure circuit breaker. After threshold

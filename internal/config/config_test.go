@@ -52,6 +52,33 @@ func TestGlobalRateLimitDefaults(t *testing.T) {
 	if c.RLTTLFloor != 60*time.Second {
 		t.Fatalf("RLTTLFloor default = %v", c.RLTTLFloor)
 	}
+	if c.LimitsRefreshInterval != 15*time.Second {
+		t.Fatalf("LimitsRefreshInterval default = %v", c.LimitsRefreshInterval)
+	}
+}
+
+func TestLimitsRefreshIntervalOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("HOOKRAIL_LIMITS_REFRESH_INTERVAL", "1s")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.LimitsRefreshInterval != time.Second {
+		t.Fatalf("LimitsRefreshInterval = %v, want 1s", c.LimitsRefreshInterval)
+	}
+}
+
+func TestLimitsRefreshIntervalRejectsBad(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("HOOKRAIL_LIMITS_REFRESH_INTERVAL", "nope")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for invalid HOOKRAIL_LIMITS_REFRESH_INTERVAL")
+	}
 }
 
 func TestGlobalRateLimitDisabled(t *testing.T) {

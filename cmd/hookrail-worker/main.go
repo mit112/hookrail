@@ -108,7 +108,7 @@ func main() {
 	el := &worker.EndpointLimits{
 		Store: s, Registry: limits,
 		Global: global, Fallback: fb,
-		Interval: 15 * time.Second,
+		Interval:    cfg.LimitsRefreshInterval,
 		DefaultRate: defRPS, DefaultBurst: defBurst,
 	}
 	if global != nil {

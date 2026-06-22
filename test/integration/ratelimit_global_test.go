@@ -4,41 +4,80 @@ package integration
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 )
 
-const epsilon = 10 // slack for async metrics polling
+const (
+	rlRPS    = 20.0            // per-endpoint override used by every case
+	rlBurst  = 2 * rlRPS       // EndpointLimits sets burst = 2*rps
+	rlWindow = 8 * time.Second // steady-state measurement window
+	epsilon  = 10              // slack for async metric/attempt accounting
+	fastTick = "1s"            // shrink the limits-refresh so the seeded override propagates fast
+)
 
-// TestGlobalCap_TwoWorkers_BoundHolds verifies that with 2 workers and a 20 rps
-// override, the global token bucket limits total admitted to ≤ burst + rate×window.
-// failopen must be 0 (healthy run) and denied(global) > 0 (non-vacuous).
+// measure runs a saturated steady-state window and returns the number of
+// delivery attempts admitted during [t0,t1) plus the window length in seconds.
+// A continuous publisher keeps demand far above the cap for the whole window,
+// so the count reflects the true admit rate and can never be vacuously zero.
+func measure(ctx context.Context, t *testing.T, ep string) (int, float64) {
+	t.Helper()
+	t0, err := DBNow(ctx)
+	if err != nil {
+		t.Fatalf("db now (t0): %v", err)
+	}
+	time.Sleep(rlWindow)
+	t1, err := DBNow(ctx)
+	if err != nil {
+		t.Fatalf("db now (t1): %v", err)
+	}
+	admitted, err := CountAttemptsBetween(ctx, ep, t0, t1)
+	if err != nil {
+		t.Fatalf("count attempts: %v", err)
+	}
+	return admitted, t1.Sub(t0).Seconds()
+}
+
+// TestGlobalCap_TwoWorkers_BoundHolds: with 2 workers sharing ONE Redis token
+// bucket at 20 rps, total admitted across both workers stays at the cluster cap
+// (rate*window + burst). Non-vacuity is enforced from both sides:
+//   - upper bound: admitted <= rate*window + burst + epsilon (cap holds)
+//   - lower bound: admitted >= 0.4*rate*window (the window genuinely saw
+//     sustained delivery — a zero/near-zero count FAILS instead of passing)
+//   - deniedGlobal > 0 (the limiter actually denied, summed over BOTH workers)
+//   - failopen == 0 (healthy run, summed over BOTH workers)
 func TestGlobalCap_TwoWorkers_BoundHolds(t *testing.T) {
-	c := SetupStack(t, WithWorkerScale(2))
+	c := SetupStack(t, WithWorkerScale(2), WithEnv("HOOKRAIL_LIMITS_REFRESH_INTERVAL", fastTick))
 	ctx := context.Background()
 
-	sr, err := SeedWithRPS(ctx, c, 20.0)
+	if err := WaitWorkerTargets(ctx, 2, 60*time.Second); err != nil {
+		t.Fatalf("worker targets: %v", err)
+	}
+	sr, err := SeedWithRPS(ctx, c, rlRPS)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	ep := sr.EndpointID
 
-	load := &Load{APIURL: apiURL, Key: sr.ProducerKey, Topic: "rl-test.*"}
-	_ = load.Burst(ctx, 100) // warm up
-	time.Sleep(2 * time.Second)
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	(&Load{APIURL: apiURL, Key: sr.ProducerKey, Topic: "rl-test.evt"}).StartSaturation(sctx, 4)
 
-	// Publish saturating burst.
-	_ = load.Burst(ctx, 2000)
-	time.Sleep(10 * time.Second)
-
-	admitted, err := CountAttemptsInWindow(ctx, ep, 10*time.Second)
-	if err != nil {
-		t.Fatalf("count attempts: %v", err)
+	// Wait until the global cap is actually active and denying before measuring.
+	if _, err := WaitDenials(ctx, "global", 30*time.Second); err != nil {
+		t.Fatalf("global cap never engaged: %v", err)
 	}
-	bound := 20.0*10 + 40 + epsilon
-	if float64(admitted) > bound {
-		t.Fatalf("global cap breached: %d > %.0f", admitted, bound)
+
+	admitted, window := measure(ctx, t, ep)
+	upper := rlRPS*window + rlBurst + epsilon
+	lower := 0.4 * rlRPS * window
+	t.Logf("admitted=%d window=%.1fs upper=%.0f lower=%.0f", admitted, window, upper, lower)
+
+	if float64(admitted) > upper {
+		t.Fatalf("global cap breached: admitted=%d > upper=%.0f", admitted, upper)
+	}
+	if float64(admitted) < lower {
+		t.Fatalf("admitted=%d < lower=%.0f — window not saturated; oracle would be vacuous", admitted, lower)
 	}
 
 	m, err := ScrapeRatelimit(ctx)
@@ -51,58 +90,64 @@ func TestGlobalCap_TwoWorkers_BoundHolds(t *testing.T) {
 	if m.DeniedGlobal == 0 {
 		t.Fatal("denied(global) must be > 0 or the cap never bound (vacuous)")
 	}
-	t.Logf("admitted=%d bound=%.0f deniedGlobal=%d failopen=%d", admitted, bound, m.DeniedGlobal, m.FailOpen)
+	t.Logf("deniedGlobal=%d failopen=%d", m.DeniedGlobal, m.FailOpen)
 }
 
-// TestGlobalCap_FlagOff_ExceedsBound verifies that with HOOKRAIL_GLOBAL_RATELIMIT=0
-// and 2 workers, admitted exceeds the single-node bound (each worker has its own
-// local bucket, giving ~2× the capacity).
+// TestGlobalCap_FlagOff_ExceedsBound: the control. With HOOKRAIL_GLOBAL_RATELIMIT=0,
+// each of the 2 workers enforces the 20 rps override in its OWN local bucket, so
+// aggregate throughput is ~2x the single-node cap. This proves the two-worker
+// test above is bounded BECAUSE of the global limiter, not because demand was
+// insufficient. deniedLocal>0 proves the override actually propagated to the
+// local registry (otherwise the default 1000 rps would let it pass for the wrong
+// reason).
 func TestGlobalCap_FlagOff_ExceedsBound(t *testing.T) {
-	c := SetupStack(t, WithWorkerScale(2), WithEnv("HOOKRAIL_GLOBAL_RATELIMIT", "0"))
+	c := SetupStack(t,
+		WithWorkerScale(2),
+		WithEnv("HOOKRAIL_GLOBAL_RATELIMIT", "0"),
+		WithEnv("HOOKRAIL_LIMITS_REFRESH_INTERVAL", fastTick),
+	)
 	ctx := context.Background()
 
-	sr, err := SeedWithRPS(ctx, c, 20.0)
+	if err := WaitWorkerTargets(ctx, 2, 60*time.Second); err != nil {
+		t.Fatalf("worker targets: %v", err)
+	}
+	sr, err := SeedWithRPS(ctx, c, rlRPS)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	ep := sr.EndpointID
 
-	load := &Load{APIURL: apiURL, Key: sr.ProducerKey, Topic: "rl-test.*"}
-	_ = load.Burst(ctx, 100) // warm up
-	time.Sleep(2 * time.Second)
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	(&Load{APIURL: apiURL, Key: sr.ProducerKey, Topic: "rl-test.evt"}).StartSaturation(sctx, 4)
 
-	_ = load.Burst(ctx, 2000)
-	time.Sleep(10 * time.Second)
+	// Wait until local rate-limiting is active+denying (proves the override
+	// reached the local registry — not the 1000 rps default).
+	if _, err := WaitDenials(ctx, "local", 30*time.Second); err != nil {
+		t.Fatalf("local cap never engaged (override did not propagate): %v", err)
+	}
 
-	admitted, err := CountAttemptsInWindow(ctx, ep, 10*time.Second)
+	admitted, window := measure(ctx, t, ep)
+	singleNode := rlRPS*window + rlBurst
+	twoNode := 2*(rlRPS*window+rlBurst) + epsilon
+	t.Logf("admitted=%d window=%.1fs singleNode=%.0f twoNode=%.0f", admitted, window, singleNode, twoNode)
+
+	if float64(admitted) <= singleNode {
+		t.Fatalf("flag-off should exceed the single-node bound (~2x); admitted=%d <= %.0f", admitted, singleNode)
+	}
+	if float64(admitted) > twoNode {
+		t.Fatalf("flag-off exceeded even the 2-worker bound; admitted=%d > %.0f", admitted, twoNode)
+	}
+
+	m, err := ScrapeRatelimit(ctx)
 	if err != nil {
-		t.Fatalf("count attempts: %v", err)
+		t.Fatalf("scrape ratelimit: %v", err)
 	}
-	singleNodeBound := 20.0*10 + 40
-	if float64(admitted) <= singleNodeBound {
-		t.Fatalf("flag-off should exceed the single-node bound (~2×); got %d <= %.0f", admitted, singleNodeBound)
+	if m.DeniedLocal == 0 {
+		t.Fatal("denied(local) must be > 0 — the override did not reach the local registry")
 	}
-	t.Logf("admitted=%d singleNodeBound=%.0f (flag-off exceeds bound as expected)", admitted, singleNodeBound)
-}
-
-func TestGlobalCap_Disabled_NoConfigAgeMetric(t *testing.T) {
-	c := SetupStack(t, WithWorkerScale(1), WithEnv("HOOKRAIL_GLOBAL_RATELIMIT", "0"))
-	ctx := context.Background()
-
-	_, err := SeedWithRPS(ctx, c, 5.0)
-	if err != nil {
-		t.Fatalf("seed: %v", err)
+	if m.DeniedGlobal != 0 {
+		t.Fatalf("global limiter must be inactive when flag is off, got deniedGlobal=%d", m.DeniedGlobal)
 	}
-
-	// Give the worker time to start and tick.
-	time.Sleep(5 * time.Second)
-
-	// When global is disabled, the config-age metric should stay at 0 (never set).
-	v, err := fetchGauge(ctx, promURL, "hookrail_ratelimit_config_age_seconds")
-	// Prometheus returns nothing for a metric that was never registered, so
-	// fetchGauge may error or return 0.
-	if err == nil && v > 0 {
-		t.Fatalf("config-age metric should be 0 when global rate limit is disabled, got %v", v)
-	}
-	_ = fmt.Sprintf("config-age metric: %v (err=%v)", v, err) // for logs
+	t.Logf("deniedLocal=%d deniedGlobal=%d", m.DeniedLocal, m.DeniedGlobal)
 }

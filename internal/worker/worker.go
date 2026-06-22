@@ -33,7 +33,7 @@ type Worker struct {
 	Client    *http.Client // ssrf.NewHTTPClient(Policy)
 	Policy    ssrf.Policy
 	Backoff   backoff.Policy
-	Limits    *ratelimit.Registry    // per endpoint id
+	Limits    *ratelimit.Registry      // per endpoint id
 	Global    *ratelimit.GlobalLimiter // when non-nil, override endpoints route through Redis-backed global limiter
 	MasterKey [32]byte
 	Lease     time.Duration
@@ -148,8 +148,11 @@ func (w *Worker) Process(ctx context.Context, deliveryID string) {
 // allowDelivery routes the rate-limit check: global Redis-backed for override
 // endpoints, local in-process Registry for everything else.
 func (w *Worker) allowDelivery(ctx context.Context, endpoint string, now time.Time) (bool, string) {
-	if w.Global != nil && w.Global.Has(endpoint) {
-		return w.Global.Allow(ctx, endpoint, now)
+	if w.Global != nil {
+		// Single atomic snapshot load inside Decide — no torn Has()+Allow() race.
+		if handled, allowed, mode := w.Global.Decide(ctx, endpoint, now); handled {
+			return allowed, mode
+		}
 	}
 	return w.Limits.Allow(endpoint, now), "local"
 }
@@ -207,8 +210,8 @@ func (w *Worker) attempt(ctx context.Context, d store.ClaimedDelivery) (res stor
 	now := time.Now()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "hookrail/0.1")
-	req.Header.Set("hookrail-event-id", d.EventID)       // both ids ship in headers (§4)
-	req.Header.Set("hookrail-delivery-id", d.ID)         // the consumer dedup key (§4)
+	req.Header.Set("hookrail-event-id", d.EventID) // both ids ship in headers (§4)
+	req.Header.Set("hookrail-delivery-id", d.ID)   // the consumer dedup key (§4)
 	req.Header.Set("hookrail-topic", d.Topic)
 	req.Header.Set(signing.Header, signing.Sign(secret, now, d.ID, d.Payload))
 
@@ -266,4 +269,9 @@ func (w *Worker) record(ctx context.Context, d store.ClaimedDelivery, res store.
 	}
 }
 
-func orDash(s string) string { if s == "" { return "-" }; return s }
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}

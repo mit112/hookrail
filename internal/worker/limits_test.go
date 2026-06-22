@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/redis/go-redis/v9"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/mit112/hookrail/internal/ratelimit"
 	"github.com/mit112/hookrail/internal/store"
