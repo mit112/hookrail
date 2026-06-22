@@ -33,6 +33,81 @@ func (e *Elector) BackendPID() uint32 {
 	return e.pid
 }
 
+// holdsLock probes pg_locks for the session advisory lock (ownership, not liveness).
+func (e *Elector) holdsLock(ctx context.Context) (bool, error) {
+	if e.conn == nil {
+		return false, nil
+	}
+	classid := uint32(e.key >> 32) //nolint:gosec // advisory lock key split into 32-bit halves
+	objid := uint32(e.key)         //nolint:gosec // always a valid positive advisory lock key
+	var n int
+	err := e.conn.QueryRow(ctx,
+		`SELECT count(*) FROM pg_locks
+		  WHERE locktype='advisory' AND pid=pg_backend_pid()
+		    AND classid=$1 AND objid=$2 AND objsubid=1`,
+		classid, objid).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// Run blocks; while leader runs do each tick, stands down on lost ownership, re-elects every interval.
+func (e *Elector) Run(ctx context.Context, tick time.Duration,
+	onElected func(context.Context) error, do func(context.Context) error) error {
+	defer e.release(context.Background())
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if e.conn == nil { // standby: try to acquire
+			got, err := e.tryAcquire(ctx)
+			if err != nil || !got {
+				if sleepCtx(ctx, e.interval) != nil {
+					return ctx.Err()
+				}
+				continue
+			}
+			e.isLeader(true)
+			_ = onElected(ctx) // startup sweep+reconcile, ONCE on election
+			// Wait a full tick before the first Cycle so onElected+do don't run back-to-back.
+			if sleepCtx(ctx, tick) != nil {
+				e.isLeader(false)
+				return ctx.Err()
+			}
+			continue
+		}
+		// leader: verify ownership, then do one cycle, then wait a tick
+		held, err := e.holdsLock(ctx)
+		if err != nil || !held {
+			e.isLeader(false)
+			e.release(ctx)
+			// Wait interval before re-acquiring to give other electors a fair
+			// chance on backend kill / connection loss (prevents flapping).
+			if sleepCtx(ctx, e.interval) != nil {
+				return ctx.Err()
+			}
+			continue
+		}
+		_ = do(ctx)
+		if sleepCtx(ctx, tick) != nil {
+			e.isLeader(false)
+			return ctx.Err()
+		}
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 // tryAcquire dials a fresh standalone conn and attempts the session lock.
 // On false/err it closes the conn so it never lingers.
 func (e *Elector) tryAcquire(ctx context.Context) (bool, error) {
