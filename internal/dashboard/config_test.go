@@ -15,7 +15,6 @@ func setMinEnv(t *testing.T) string {
 	if err := os.WriteFile(usersFile, []byte("alice:"+mustHash(t, "pw-alice")+":admin\n"), 0o600); err != nil { t.Fatal(err) }
 	tokensFile := filepath.Join(dir, "roletokens")
 	if err := os.WriteFile(tokensFile, []byte(goodRoleTokensFile()), 0o600); err != nil { t.Fatal(err) }
-	t.Setenv("HOOKRAIL_DASHBOARD_PASSWORD", "s3cret-long-enough")
 	t.Setenv("HOOKRAIL_DASHBOARD_SESSION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("HOOKRAIL_ADMIN_TOKEN", "dev-admin-token-001")
 	t.Setenv("HOOKRAIL_PRODUCER_KEY_FILE", keyFile)
@@ -50,17 +49,3 @@ func TestLoadConfigMissingSessionKeyTooShort(t *testing.T) {
 	if _, err := LoadConfig(); err == nil { t.Fatal("expected error for short session key") }
 }
 
-func TestLoadConfigMissingPassword(t *testing.T) {
-	setMinEnv(t)
-	// Literal string — can't fail.
-	os.Unsetenv("HOOKRAIL_DASHBOARD_PASSWORD") //nolint:errcheck
-	if _, err := LoadConfig(); err == nil { t.Fatal("expected error for missing password") }
-}
-
-func TestLoadConfig_RejectsShortPassword(t *testing.T) {
-	setMinEnv(t)
-	t.Setenv("HOOKRAIL_DASHBOARD_PASSWORD", "short")
-	if _, err := LoadConfig(); err == nil {
-		t.Fatal("want error for <16-char password")
-	}
-}

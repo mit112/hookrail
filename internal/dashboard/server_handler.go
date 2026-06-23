@@ -8,7 +8,7 @@ func (s *Server) Handler() http.Handler {
 	// auth (login public; logout/session guarded)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.requireSession(s.handleLogout))
-	mux.HandleFunc("GET /api/session", s.requireSession(s.handleSession))
+	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("POST /api/test-event", s.requireSession(s.handleTestEvent))
 	// allowlist admin proxy
 	for _, rt := range s.adminRoutes() {

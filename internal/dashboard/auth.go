@@ -1,13 +1,13 @@
 package dashboard
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mit112/hookrail/internal/httpx"
@@ -16,22 +16,28 @@ import (
 type Server struct {
 	cfg      Config
 	sessions *Sessions
-	pwDigest [32]byte
+	usersPtr atomic.Pointer[Users]
 	thr      *throttle
+	log      *slog.Logger
 	now      func() time.Time
 }
 
 func NewServer(cfg Config) *Server {
-	return &Server{
+	s := &Server{
 		cfg:      cfg,
 		sessions: NewSessions(cfg),
-		pwDigest: sha256.Sum256([]byte(cfg.Password)),
 		thr:      newThrottle(10, time.Minute),
+		log:      slog.Default(),
 		now:      time.Now,
 	}
+	s.usersPtr.Store(cfg.Users)
+	return s
 }
 
 func (s *Server) cookieName() string { return "hk_dash" }
+
+// currentUsers returns the live user set (swapped atomically on reload, M5).
+func (s *Server) currentUsers() *Users { return s.usersPtr.Load() }
 
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -52,6 +58,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -60,27 +67,29 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			httpx.Problem(w, http.StatusRequestEntityTooLarge, "request too large", "request body exceeds 64 KiB")
 			return
 		}
-		httpx.Problem(w, http.StatusBadRequest, "invalid body", `expected {"password": string}`)
+		httpx.Problem(w, http.StatusBadRequest, "invalid body", `expected {"username": string, "password": string}`)
 		return
 	}
-	got := sha256.Sum256([]byte(body.Password))
-	if subtle.ConstantTimeCompare(got[:], s.pwDigest[:]) != 1 {
-		httpx.Problem(w, http.StatusUnauthorized, "invalid credentials", "wrong password")
+	role, ok := s.currentUsers().Verify(body.Username, body.Password)
+	if !ok {
+		s.log.Info("dashboard login failed", "user", body.Username, "ip", clientIP(r))
+		httpx.Problem(w, http.StatusUnauthorized, "invalid credentials", "wrong username or password")
 		return
 	}
 	// Secure set dynamically via InsecureCookie flag — allowed by design.
 	//nolint:gosec
 	http.SetCookie(w, &http.Cookie{
 		Name:     s.cookieName(),
-		Value:    s.sessions.Issue(s.now()),
+		Value:    s.sessions.Issue(s.now(), body.Username),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   !s.cfg.InsecureCookie,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(s.cfg.SessionTTL.Seconds()),
 	})
+	s.log.Info("dashboard login ok", "user", body.Username, "role", role.String())
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]bool{"authenticated": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "role": role.String(), "username": body.Username})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
@@ -98,9 +107,28 @@ func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleSession(w http.ResponseWriter, _ *http.Request) {
+// subject validates the session cookie and returns the authenticated username.
+func (s *Server) subject(r *http.Request) (string, bool) {
+	c, err := r.Cookie(s.cookieName())
+	if err != nil {
+		return "", false
+	}
+	return s.sessions.Valid(c.Value, s.now())
+}
+
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	sub, ok := s.subject(r)
+	if !ok {
+		httpx.Problem(w, http.StatusUnauthorized, "unauthenticated", "no valid session")
+		return
+	}
+	role, ok := s.currentUsers().RoleOf(sub)
+	if !ok { // user removed since the cookie was issued
+		httpx.Problem(w, http.StatusUnauthorized, "unauthenticated", "user no longer exists")
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]bool{"authenticated": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "role": role.String(), "username": sub})
 }
 
 // throttle: fixed-window per key.

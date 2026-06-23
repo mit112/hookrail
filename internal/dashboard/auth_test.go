@@ -9,8 +9,7 @@ import (
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
-	keyFile := setMinEnv(t)
-	_ = keyFile
+	setMinEnv(t)
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -18,9 +17,11 @@ func testServer(t *testing.T) *Server {
 	return NewServer(cfg)
 }
 
+// setMinEnv provisions user alice/pw-alice (admin) — see config_test.go.
+
 func TestLoginWrongPassword(t *testing.T) {
 	srv := testServer(t)
-	r := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"password":"nope"}`))
+	r := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"username":"alice","password":"nope"}`))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, r)
@@ -32,9 +33,20 @@ func TestLoginWrongPassword(t *testing.T) {
 	}
 }
 
-func TestLoginRightPasswordSetsCookie(t *testing.T) {
+func TestLoginUnknownUserUniform401(t *testing.T) {
 	srv := testServer(t)
-	r := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"password":"s3cret-long-enough"}`))
+	r := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"username":"ghost","password":"x"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown user: want 401, got %d", w.Code)
+	}
+}
+
+func TestLoginRightCredentialsSetsCookieAndSessionRole(t *testing.T) {
+	srv := testServer(t)
+	r := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"username":"alice","password":"pw-alice"}`))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, r)
@@ -53,12 +65,20 @@ func TestLoginRightPasswordSetsCookie(t *testing.T) {
 	if !found.HttpOnly || found.SameSite != http.SameSiteStrictMode {
 		t.Error("cookie must be HttpOnly+SameSite=Strict")
 	}
+	// Session endpoint returns the live role.
+	sr := httptest.NewRequest("GET", "/api/session", nil)
+	sr.AddCookie(found)
+	sw := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(sw, sr)
+	if sw.Code != http.StatusOK || !strings.Contains(sw.Body.String(), `"role":"admin"`) {
+		t.Fatalf("session: code=%d body=%s", sw.Code, sw.Body.String())
+	}
 }
 
 func TestThrottleLocksOut(t *testing.T) {
 	srv := testServer(t)
 	for i := 0; i < 12; i++ {
-		r := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"password":"nope"}`))
+		r := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"username":"alice","password":"nope"}`))
 		r.Header.Set("Content-Type", "application/json")
 		r.RemoteAddr = "10.0.0.9:1234"
 		w := httptest.NewRecorder()
@@ -71,9 +91,8 @@ func TestThrottleLocksOut(t *testing.T) {
 
 func TestLoginOversizedBody_Returns413(t *testing.T) {
 	srv := testServer(t)
-	// Build valid JSON body just over 64 KiB — the only reason to reject is size
-	password := strings.Repeat("a", 64*1024-13) // 65523 a's = 65537 total body len
-	body := `{"password":"` + password + `"}`
+	password := strings.Repeat("a", 64*1024)
+	body := `{"username":"alice","password":"` + password + `"}`
 	r := httptest.NewRequest("POST", "/api/login", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

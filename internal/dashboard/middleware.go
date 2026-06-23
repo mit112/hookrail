@@ -9,7 +9,11 @@ import (
 func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(s.cookieName())
-		if err != nil || !s.sessions.Valid(c.Value, s.now()) {
+		if err != nil {
+			httpx.Problem(w, http.StatusUnauthorized, "not authenticated", "log in first")
+			return
+		}
+		if _, ok := s.sessions.Valid(c.Value, s.now()); !ok {
 			httpx.Problem(w, http.StatusUnauthorized, "not authenticated", "log in first")
 			return
 		}

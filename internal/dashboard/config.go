@@ -10,7 +10,6 @@ import (
 )
 
 type Config struct {
-	Password       string // legacy single password (removed once login migrates, M2)
 	SessionKey     []byte
 	SessionPrev    []byte // optional; nil when unset
 	AdminToken     string // legacy single upstream token (removed once proxy migrates, M4)
@@ -39,10 +38,6 @@ func LoadConfig() (Config, error) {
 		return v, nil
 	}
 	var err error
-	if c.Password, err = req("HOOKRAIL_DASHBOARD_PASSWORD"); err != nil { return c, err }
-	if len(c.Password) < 16 {
-		return Config{}, fmt.Errorf("HOOKRAIL_DASHBOARD_PASSWORD must be >= 16 chars")
-	}
 	sk := os.Getenv("HOOKRAIL_DASHBOARD_SESSION_KEY")
 	if len(sk) < 32 { return c, errors.New("HOOKRAIL_DASHBOARD_SESSION_KEY must be >= 32 bytes") }
 	c.SessionKey = []byte(sk)

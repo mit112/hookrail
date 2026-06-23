@@ -9,7 +9,7 @@ import (
 // Test helper only — no dynamic Secure flag needed.
 //nolint:gosec
 func authedCookie(t *testing.T, s *Server) *http.Cookie {
-	return &http.Cookie{Name: s.cookieName(), Value: s.sessions.Issue(s.now())}
+	return &http.Cookie{Name: s.cookieName(), Value: s.sessions.Issue(s.now(), "alice")}
 }
 
 func TestRequireSessionNoCookie(t *testing.T) {
