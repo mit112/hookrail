@@ -3,7 +3,7 @@ package admin
 import "testing"
 
 func TestRoleRankAndParse(t *testing.T) {
-	if !(RoleViewer < RoleOperator && RoleOperator < RoleAdmin) {
+	if RoleViewer >= RoleOperator || RoleOperator >= RoleAdmin {
 		t.Fatal("role ranks must be viewer < operator < admin")
 	}
 	cases := map[string]Role{"viewer": RoleViewer, "operator": RoleOperator, "admin": RoleAdmin}

@@ -46,6 +46,7 @@ func TestRoleMatrix(t *testing.T) {
 	}
 	// One representative path per tier. We only assert the authz decision
 	// (403 vs not-403), not the downstream business status.
+	//nolint:gosec // G101 false positive: these are URL paths, not credentials.
 	probe := map[string]string{
 		"GET /v1/deliveries":                "/v1/deliveries",
 		"POST /v1/dlq/{delivery_id}/replay": "/v1/dlq/does-not-exist/replay",
