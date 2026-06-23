@@ -65,17 +65,21 @@ services:
       # NOTE: $$ escapes a literal $ so docker compose does not interpolate
       # these shell variables at config-parse time.
       - |
-        set -e
-        hookrail-ctl create-producer-key -name dashboard | awk -F= '/^producer_key=/{print $$2}' > /run/secrets/producer_key
+        set -eu
+        pk=$$(hookrail-ctl create-producer-key -name dashboard | awk -F= '/^producer_key=/{print $$2}')
+        case "$$pk" in hk_*) ;; *) echo "FATAL: empty/invalid producer key" >&2; exit 1;; esac
+        printf '%s' "$$pk" > /run/secrets/producer_key
         chmod 0644 /run/secrets/producer_key
         : > /run/secrets/role_tokens
         for r in viewer operator admin; do
           tok=$$(hookrail-ctl create-admin-token -role "$$r" | awk -F= '/^admin_token=/{print $$2}')
+          case "$$tok" in hkadm_*) ;; *) echo "FATAL: empty/invalid $$r token" >&2; exit 1;; esac
           echo "$$r:$$tok" >> /run/secrets/role_tokens
         done
         chmod 0644 /run/secrets/role_tokens
         h=$$(hookrail-dash-hash -hash-only -password dev-dashboard-pw)
-        echo "admin:$$h:admin" > /run/secrets/dashboard_users
+        [ -n "$$h" ] || { echo "FATAL: empty users hash" >&2; exit 1; }
+        printf 'admin:%s:admin\n' "$$h" > /run/secrets/dashboard_users
         chmod 0644 /run/secrets/dashboard_users
     environment: *hookrail-env
     volumes: [dashboard-secret:/run/secrets]

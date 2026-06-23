@@ -25,14 +25,18 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              set -e
-              hookrail-ctl create-producer-key -name dashboard
+              set -eu
+              pk=$(hookrail-ctl create-producer-key -name dashboard | awk -F= '/^producer_key=/{print $2}')
+              case "$pk" in hk_*) ;; *) echo "FATAL: empty/invalid producer key" >&2; exit 1;; esac
+              printf 'producer_key=%s\n' "$pk"
               for r in viewer operator admin; do
-                printf 'role_token_%s=' "$r"
-                hookrail-ctl create-admin-token -role "$r" | awk -F= '/^admin_token=/{print $2}'
+                tok=$(hookrail-ctl create-admin-token -role "$r" | awk -F= '/^admin_token=/{print $2}')
+                case "$tok" in hkadm_*) ;; *) echo "FATAL: empty/invalid $r token" >&2; exit 1;; esac
+                printf 'role_token_%s=%s\n' "$r" "$tok"
               done
-              printf 'users_hash='
-              hookrail-dash-hash -hash-only -password dev-dashboard-pw
+              h=$(hookrail-dash-hash -hash-only -password dev-dashboard-pw)
+              [ -n "$h" ] || { echo "FATAL: empty users hash" >&2; exit 1; }
+              printf 'users_hash=%s\n' "$h"
           env:
             - name: DATABASE_URL
               valueFrom:

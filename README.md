@@ -287,17 +287,22 @@ These are documented design trade-offs, not bugs.
 
 ### Admin & dashboard
 
-- **Single shared password, no RBAC.** Every authenticated dashboard user has full
-  read/write access. Multi-user auth and scoped permissions are deferred.
-- **Stateless cookie, no revocation.** The session cookie is a self-contained
-  HMAC-signed token with a TTL; a compromised cookie can't be revoked before it
-  expires. Logout only clears it client-side.
+- **Per-user accounts with roles (RBAC R2).** Dashboard users come from a mounted
+  file mapped to `viewer < operator < admin`; the BFF enforces a per-route minimum
+  role and forwards a role-matched, attested upstream token (see
+  [docs/dashboard.md](docs/dashboard.md)). UI gating is cosmetic — the BFF and
+  admin API are the boundary.
+- **Cookie carries identity, role resolved live.** The session cookie holds only a
+  signed username; the role is resolved per request from the live user file, so
+  deleting/downgrading a user takes effect on the next request after a reload.
+  Immediate global revocation is a session-key rotation; a single leaked cookie
+  still can't be revoked individually before its TTL.
 - **`next_cursor` is forgeable.** Keyset cursors are unsigned and tamperable. This
   reveals only data the user can already see (no privilege escalation), but cursor
   integrity is not guaranteed.
-- **Admin-token blast radius.** The BFF holds the full `HOOKRAIL_ADMIN_TOKEN` in
-  memory; compromising the BFF leaks full admin API access. Network policy and
-  read-only proxy routes limit but don't eliminate this.
+- **Role-token blast radius.** The BFF holds the role-scoped admin tokens in memory;
+  compromising the BFF leaks access bounded to those roles (no longer a single full-
+  admin token). Network policy and the per-route allowlist limit it further.
 - **Test-event key exposure.** The test-event feature injects a provisioned
   producer key into the BFF's upstream calls; a BFF compromise leaks the ability
   to produce test events.
