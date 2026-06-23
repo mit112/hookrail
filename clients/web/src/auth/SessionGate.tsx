@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchSession } from "./session";
 import { Login } from "./Login";
+import { RoleProvider } from "./role";
 
 export function SessionGate({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
@@ -13,6 +14,8 @@ export function SessionGate({ children }: { children: ReactNode }) {
   });
 
   if (isLoading) return <p>Loading…</p>;
-  if (isError || !data) return <Login onSuccess={() => qc.invalidateQueries({ queryKey: ["session"] })} />;
-  return <>{children}</>;
+  if (isError || !data?.authenticated) {
+    return <Login onSuccess={() => qc.invalidateQueries({ queryKey: ["session"] })} />;
+  }
+  return <RoleProvider role={data.role}>{children}</RoleProvider>;
 }
