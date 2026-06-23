@@ -117,5 +117,16 @@ func (s *Server) adminRoutes() []route {
 		{"POST", "/v1/dlq/{delivery_id}/replay", admin.RoleOperator},
 		{"GET", "/v1/deliveries", admin.RoleViewer},
 		{"GET", "/v1/deliveries/{id}", admin.RoleViewer},
+		{"POST", "/v1/deliveries/{id}/skip", admin.RoleOperator},
+		{"GET", "/v1/ordered-keys", admin.RoleViewer},
 	}
+}
+
+// notProxied are upstream admin routes the dashboard intentionally never
+// exposes: token management (R1, off-allowlist by design) and the whoami probe.
+var notProxied = map[string]bool{
+	"GET /v1/whoami":               true,
+	"POST /v1/admin-tokens":        true,
+	"GET /v1/admin-tokens":         true,
+	"DELETE /v1/admin-tokens/{id}": true,
 }
