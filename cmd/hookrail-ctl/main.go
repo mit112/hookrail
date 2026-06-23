@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/mit112/hookrail/internal/config"
 	"github.com/mit112/hookrail/internal/scheduler"
@@ -19,6 +20,7 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate|retention|create-producer-key|create-admin-token> [flags]")
+	fmt.Fprintln(os.Stderr, "  create-producer-key -name <n> -scope <pattern> [-scope <pattern>…]")
 }
 
 func wantsHelp(args []string) bool {
@@ -98,7 +100,16 @@ func main() {
 	if os.Args[1] == "create-producer-key" {
 		fs := flag.NewFlagSet("create-producer-key", flag.ExitOnError)
 		name := fs.String("name", "dashboard", "human label for the key")
+		var scopes []string
+		fs.Func("scope", "allowed topic pattern (repeatable; at least one required)", func(v string) error {
+			scopes = append(scopes, v)
+			return nil
+		})
 		_ = fs.Parse(os.Args[2:])
+		if len(scopes) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: hookrail-ctl create-producer-key -name <n> -scope <pattern> [-scope <pattern>…]")
+			os.Exit(2)
+		}
 		cfg, err := config.Load()
 		if err != nil {
 			slog.Error("config", "err", err)
@@ -110,12 +121,12 @@ func main() {
 			os.Exit(1)
 		}
 		defer s.Close()
-		id, plaintext, err := s.CreateProducerKey(context.Background(), *name, []string{"*"})
+		id, plaintext, err := s.CreateProducerKey(context.Background(), *name, scopes)
 		if err != nil {
 			slog.Error("create-producer-key", "err", err)
 			os.Exit(1)
 		}
-		fmt.Printf("producer_key=%s\nkey_id=%s\n", plaintext, id)
+		fmt.Printf("producer_key=%s\nkey_id=%s\nscopes=%s\n", plaintext, id, strings.Join(scopes, ","))
 		return
 	}
 	if os.Args[1] == "create-admin-token" {

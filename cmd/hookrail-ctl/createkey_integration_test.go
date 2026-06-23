@@ -51,7 +51,7 @@ func TestCreateProducerKeyEmitsKey(t *testing.T) {
 	}
 	s.Close()
 
-	cmd := exec.Command("go", "run", ".", "create-producer-key", "-name", "test")
+	cmd := exec.Command("go", "run", ".", "create-producer-key", "-name", "test", "-scope", "*")
 	// REDIS_ADDR is validated by config.Load but never dialed by create-producer-key;
 	// HOOKRAIL_MASTER_KEY must be 64 hex chars (unused by this path, validated at load).
 	cmd.Env = append(os.Environ(),
@@ -65,5 +65,8 @@ func TestCreateProducerKeyEmitsKey(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "producer_key=hk_") {
 		t.Fatalf("expected producer_key=hk_… in output, got: %s", out)
+	}
+	if !strings.Contains(string(out), "scopes=*") {
+		t.Fatalf("expected scopes=* in output, got: %s", out)
 	}
 }
