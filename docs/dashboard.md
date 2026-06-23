@@ -70,7 +70,9 @@ directly — the dashboard does not proxy token management in R1:
 - `GET /v1/admin-tokens` lists token metadata (never the secret).
 - `DELETE /v1/admin-tokens/{id}` revokes a token; it stops working immediately.
 
-Only the SHA-256 of each token is stored. At most 256 active tokens are allowed.
+Only the SHA-256 of each token is stored. The number of active tokens is bounded
+to roughly 256 (a best-effort anti-sprawl cap; concurrent creates may admit a few
+beyond it).
 
 ### Break-glass
 

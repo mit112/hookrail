@@ -12,12 +12,14 @@ import (
 )
 
 // AdminTokenRow is the metadata view of an admin token (never the hash/plaintext).
+// JSON tags match the OpenAPI AdminToken schema (snake_case) — this is the body
+// emitted by GET /v1/admin-tokens.
 type AdminTokenRow struct {
-	ID        string
-	Role      string
-	Label     string
-	CreatedAt time.Time
-	RevokedAt *time.Time
+	ID        string     `json:"id"`
+	Role      string     `json:"role"`
+	Label     string     `json:"label"`
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at"`
 }
 
 // CreateAdminToken stores a new RBAC token hashed and returns (id, plaintext).

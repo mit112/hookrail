@@ -164,13 +164,28 @@ func TestAdminTokenLifecycle(t *testing.T) {
 		t.Errorf("operator mint = %d, want 403", c)
 	}
 
-	// List shows it; never a hash/plaintext.
+	// List shows it; never a hash/plaintext; keys match the OpenAPI schema (snake_case).
 	lw := do(t, srv, "GET", "/v1/admin-tokens", nil)
 	if lw.Code != http.StatusOK {
 		t.Fatalf("list = %d, want 200", lw.Code)
 	}
 	if strings.Contains(lw.Body.String(), "token_hash") || strings.Contains(lw.Body.String(), created.Token) {
 		t.Error("list leaked hash/plaintext")
+	}
+	var listed struct {
+		Items []map[string]any `json:"items"`
+	}
+	mustJSON(t, lw, &listed)
+	if len(listed.Items) != 1 {
+		t.Fatalf("list items = %d, want 1", len(listed.Items))
+	}
+	for _, k := range []string{"id", "role", "label", "created_at"} {
+		if _, ok := listed.Items[0][k]; !ok {
+			t.Errorf("list item missing OpenAPI key %q; got keys %v", k, listed.Items[0])
+		}
+	}
+	if listed.Items[0]["role"] != "operator" {
+		t.Errorf("list item role = %v, want operator", listed.Items[0]["role"])
 	}
 
 	// Bad role -> 422.

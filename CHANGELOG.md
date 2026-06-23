@@ -7,7 +7,7 @@ All notable changes documented here. Honest history — early entries include de
 ### RBAC R1 — Admin API role-based access control
 
 - **Three role-scoped admin tokens** ranked `viewer < operator < admin`, enforced per-route in the admin API middleware (`viewer` reads; `operator` adds replay/skip; `admin` adds config, secret rotation, and token management). A valid token below a route's minimum role gets `403`; missing/invalid/revoked gets `401`; a credential-store outage gets `503` (never fail-open).
-- **`/v1/admin-tokens` management** (admin-only): `POST` mints a token (plaintext `hkadm_…` returned once, `Cache-Control: no-store`), `GET` lists metadata, `DELETE` revokes immediately. Tokens are stored only as SHA-256; at most 256 active. Not proxied by the dashboard BFF in R1.
+- **`/v1/admin-tokens` management** (admin-only): `POST` mints a token (plaintext `hkadm_…` returned once, `Cache-Control: no-store`), `GET` lists metadata, `DELETE` revokes immediately. Tokens are stored only as SHA-256; active tokens are bounded to ~256 (best-effort anti-sprawl cap). Not proxied by the dashboard BFF in R1.
 - **Break-glass:** `HOOKRAIL_ADMIN_TOKEN` remains a full-admin bootstrap credential via a constant-time compare, independent of the database. Fully backward compatible — existing deployments are unchanged until scoped tokens are minted.
 
 ## [P2]
