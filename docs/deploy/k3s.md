@@ -68,21 +68,11 @@ kubectl -n hookrail create secret generic cloudflared-token \
   --from-literal=token='<cloudflare-tunnel-token>'
 ```
 
-## 3. Generate the dashboard producer key
+> The dashboard producer key is generated **after** migrations apply (see step 8):
+> `create-producer-key` writes the `producer_key_scopes` row created by migration
+> 0010 in the same transaction, so it must run once the migrate Job has completed.
 
-```bash
-hookrail-ctl create-producer-key -name dashboard
-# prints: producer_key=hk_...
-```
-
-Copy the generated key (the `hk_...` value after `=`):
-
-```bash
-kubectl -n hookrail create secret generic hookrail-dashboard-producer-key \
-  --from-literal=producer_key='hk_...'
-```
-
-## 4. Configure the Cloudflare Tunnel hostnames
+## 3. Configure the Cloudflare Tunnel hostnames
 
 Edit `deploy/k8s/overlays/prod/cloudflared.yaml` and replace the two
 placeholders:
@@ -90,7 +80,7 @@ placeholders:
 - `INGEST_HOSTNAME_PLACEHOLDER` → your ingest hostname (e.g. `ingest.example.com`)
 - `DASHBOARD_HOSTNAME_PLACEHOLDER` → your dashboard hostname (e.g. `dashboard.example.com`)
 
-## 5. Pin container images
+## 4. Pin container images
 
 Use the exact digest from GHCR (prevents accidental roll-forward):
 
@@ -104,7 +94,7 @@ Use the exact digest from GHCR (prevents accidental roll-forward):
 
 Replace `<digest>` with the `sha256:...` from the latest `:main` tag on GHCR.
 
-## 6. Delete any stale migrate Job
+## 5. Delete any stale migrate Job
 
 ```bash
 kubectl -n hookrail delete job migrate --ignore-not-found
@@ -112,16 +102,35 @@ kubectl -n hookrail delete job migrate --ignore-not-found
 
 This is safe — the new apply will recreate it.
 
-## 7. Apply the prod overlay
+## 6. Apply the prod overlay
 
 ```bash
 kubectl apply -k deploy/k8s/overlays/prod
 ```
 
-## 8. Wait for the migrate Job
+## 7. Wait for the migrate Job
 
 ```bash
 kubectl -n hookrail wait --for=condition=complete --timeout=180s job/migrate
+```
+
+## 8. Generate the dashboard producer key
+
+Run this **after** the migrate Job completes (step 7): migration 0010 creates the
+`producer_key_scopes` table, and `create-producer-key` writes the key's scope row
+in the same transaction. The dashboard publishes user-chosen topics via its test
+event, so it is scoped to all topics (`-scope '*'`).
+
+```bash
+hookrail-ctl create-producer-key -name dashboard -scope '*'
+# prints: producer_key=hk_...  key_id=...  scopes=*
+```
+
+Copy the generated key (the `hk_...` value after `=`):
+
+```bash
+kubectl -n hookrail create secret generic hookrail-dashboard-producer-key \
+  --from-literal=producer_key='hk_...'
 ```
 
 ## 9. Enable the app role login

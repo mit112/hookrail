@@ -4,6 +4,13 @@ All notable changes documented here. Honest history — early entries include de
 
 ## [Unreleased]
 
+### RBAC R3 — Producer-key topic scopes
+
+- **Each `hk_` producer key is restricted to a set of allowed topic patterns** (`MatchTopic` semantics: exact, `foo.*` prefix, or `*`). `POST /v1/events` returns **403** for a topic outside the key's scope — a leaked or over-broad key can no longer publish arbitrary topics. The denial happens before the event is recorded and before the idempotency replay path (no event row, no replayable result).
+- **Scopes are set at key creation and immutable:** `hookrail-ctl create-producer-key -name <n> -scope <pattern>` (repeatable, **≥1 required** — a scopeless key is refused). There is no admin API or dashboard surface for producer keys; rotate the key to change its scope. Deny-when-unscoped is **fail-closed** (a key with zero scope rows is denied everything).
+- **Migration 0010** adds `producer_key_scopes` and backfills `'*'` for every pre-R3 key, so existing deployments are **non-breaking**. The dashboard test-event key is provisioned `'*'`-scoped at every site (compose, k8s keygen-job, k3s runbook). Scope enforcement becomes fully effective once all API replicas are on the R3 image (app-layer authz, same rolling-deploy model as R1/R2).
+- **Python SDK:** new typed `ForbiddenError` (subclass of `HookrailAPIError`) for 403; it stays non-retryable.
+
 ### RBAC R2 — Dashboard users & role-aware UI
 
 - **Per-user dashboard accounts** from a mounted secret file (`username:argon2id-hash:role`), replacing the single shared password. Login takes a username + password (uniform-failure verify); the `hookrail-dash-hash` helper mints file entries.

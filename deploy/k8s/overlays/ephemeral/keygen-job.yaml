@@ -26,7 +26,7 @@ spec:
           args:
             - |
               set -eu
-              pk=$(hookrail-ctl create-producer-key -name dashboard | awk -F= '/^producer_key=/{print $2}')
+              pk=$(hookrail-ctl create-producer-key -name dashboard -scope '*' | awk -F= '/^producer_key=/{print $2}')
               case "$pk" in hk_*) ;; *) echo "FATAL: empty/invalid producer key" >&2; exit 1;; esac
               printf 'producer_key=%s\n' "$pk"
               for r in viewer operator admin; do
