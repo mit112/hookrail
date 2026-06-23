@@ -10,16 +10,23 @@ import (
 )
 
 type Config struct {
-	Password       string
+	Password       string // legacy single password (removed once login migrates, M2)
 	SessionKey     []byte
 	SessionPrev    []byte // optional; nil when unset
-	AdminToken     string
+	AdminToken     string // legacy single upstream token (removed once proxy migrates, M4)
 	ProducerKey    string
 	AdminURL       string
 	IngressURL     string
 	Addr           string
 	SessionTTL     time.Duration
 	InsecureCookie bool
+
+	// RBAC R2: per-user accounts + role-matched upstream tokens, loaded from
+	// mounted secret files.
+	UsersFile      string
+	RoleTokensFile string
+	Users          *Users
+	RoleTokens     *RoleTokens
 }
 
 func LoadConfig() (Config, error) {
@@ -66,5 +73,19 @@ func LoadConfig() (Config, error) {
 		if d, derr := time.ParseDuration(v); derr == nil { c.SessionTTL = d } else { return c, fmt.Errorf("bad HOOKRAIL_DASHBOARD_SESSION_TTL: %w", derr) }
 	}
 	c.InsecureCookie = os.Getenv("HOOKRAIL_DASHBOARD_INSECURE_COOKIE") == "true"
+
+	// RBAC R2 user + role-token files (fail closed at load).
+	if c.UsersFile, err = req("HOOKRAIL_DASHBOARD_USERS_FILE"); err != nil {
+		return c, err
+	}
+	if c.Users, err = LoadUsers(c.UsersFile); err != nil {
+		return c, err
+	}
+	if c.RoleTokensFile, err = req("HOOKRAIL_DASHBOARD_ROLE_TOKENS_FILE"); err != nil {
+		return c, err
+	}
+	if c.RoleTokens, err = LoadRoleTokens(c.RoleTokensFile); err != nil {
+		return c, err
+	}
 	return c, nil
 }
