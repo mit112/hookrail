@@ -12,16 +12,18 @@ import (
 	"github.com/mit112/hookrail/internal/admin"
 )
 
-// attestState holds the active, attested role-token snapshot. current is nil
-// until the first successful attestation and is cleared when a re-probe fails;
-// proxyAdmin fails closed (503) while nil. last keeps the most recent intended
-// snapshot so the periodic re-probe can re-attest and recover. A monotonic gen
-// counter lets the re-probe discard results derived from a snapshot that a
-// concurrent reload has since superseded (no stale clobber/rollback).
+// attestState tracks the DESIRED role-token set (the latest loaded from disk)
+// and the CURRENT active snapshot (attested; nil = proxyAdmin/readyz fail
+// closed). The re-probe loop drives current toward desired: a successful probe
+// of desired makes it active; a failure clears current. desired is updated on
+// every load (InitialAttest/Reload) even when attestation fails, so a rotation
+// during a transient upstream outage still recovers to the NEW tokens — never
+// wedges on stale ones. gen is bumped whenever desired changes, letting an
+// in-flight probe discard its result if a newer load superseded it.
 type attestState struct {
 	mu      sync.Mutex
+	desired *RoleTokens
 	current *RoleTokens
-	last    *RoleTokens
 	gen     uint64
 }
 
@@ -33,59 +35,64 @@ func (a *attestState) get() (*RoleTokens, bool) {
 	return a.current, a.current != nil
 }
 
-// publish stores an independent clone (immutable, decoupled from any caller
-// reference) as both the active and the last-intended snapshot, bumping gen.
+// setDesired records a new target (clone) without changing the active snapshot;
+// the next probe drives current toward it. Bumps gen.
+func (a *attestState) setDesired(rt *RoleTokens) {
+	c := rt.clone()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.desired = c
+	a.gen++
+}
+
+// publish makes rt the desired AND active snapshot at once (success building
+// block; also used by tests).
 func (a *attestState) publish(rt *RoleTokens) {
 	c := rt.clone()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.last = c
+	a.desired = c
 	a.current = c
 	a.gen++
 }
 
-// reprobeSource returns the snapshot to re-probe and the gen it was read at.
-func (a *attestState) reprobeSource() (*RoleTokens, uint64) {
+// probeTarget returns the desired snapshot to probe and the gen it was read at.
+func (a *attestState) probeTarget() (*RoleTokens, uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.last, a.gen
+	return a.desired, a.gen
 }
 
-// applyReprobe applies a re-probe outcome iff no publish/clear happened since
-// genBefore (otherwise the result is stale and dropped). On failure it clears
-// the active snapshot; on success it republishes a clone of src if currently
-// cleared. Returns the bump so callers can observe whether it applied.
-func (a *attestState) applyReprobe(genBefore uint64, src *RoleTokens, ok bool) {
+// applyProbe applies a probe outcome iff desired has not changed since gen
+// (otherwise the result is stale and dropped). Success activates d; failure
+// fails closed.
+func (a *attestState) applyProbe(gen uint64, d *RoleTokens, ok bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.gen != genBefore {
-		return // a concurrent reload superseded this probe
+	if a.gen != gen {
+		return // a newer load superseded this probe
 	}
-	if !ok {
-		if a.current != nil {
-			a.current = nil
-			a.gen++
-		}
-		return
-	}
-	if a.current == nil {
-		c := src.clone()
-		a.current = c
-		a.last = c
-		a.gen++
+	if ok {
+		a.current = d
+	} else {
+		a.current = nil
 	}
 }
 
 // currentRoleTokens returns the active attested snapshot, if any.
 func (s *Server) currentRoleTokens() (*RoleTokens, bool) { return s.attest.get() }
 
-// attestAndPublish probes rt and, only on success, makes it the active snapshot.
-func (s *Server) attestAndPublish(ctx context.Context, rt *RoleTokens) error {
-	if err := attestProbe(ctx, s.cfg.AdminURL, rt); err != nil {
-		return err
+// attestNow probes the current desired snapshot and applies the outcome
+// (success → active, failure → fail closed). Stale results (a newer desired
+// landed mid-probe) are dropped by applyProbe's gen check.
+func (s *Server) attestNow(ctx context.Context) error {
+	d, gen := s.attest.probeTarget()
+	if d == nil {
+		return fmt.Errorf("no role tokens configured")
 	}
-	s.attest.publish(rt)
-	return nil
+	err := attestProbe(ctx, s.cfg.AdminURL, d)
+	s.attest.applyProbe(gen, d, err == nil)
+	return err
 }
 
 // StartReprobe periodically re-attests the intended snapshot. On failure it
@@ -106,13 +113,7 @@ func (s *Server) StartReprobe(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				src, gen := s.attest.reprobeSource()
-				if src == nil {
-					src = s.cfg.RoleTokens // cold-start fallback: keep trying startup tokens
-				}
-				err := attestProbe(ctx, s.cfg.AdminURL, src)
-				s.attest.applyReprobe(gen, src, err == nil)
-				if err != nil {
+				if err := s.attestNow(ctx); err != nil {
 					s.log.Error("attestation re-probe failed; role tokens cleared", "err", err)
 				}
 			}

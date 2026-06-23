@@ -13,7 +13,8 @@ import (
 // snapshot exists, and the periodic re-probe will recover when the admin API is
 // reachable.
 func (s *Server) InitialAttest(ctx context.Context) error {
-	return s.attestAndPublish(ctx, s.cfg.RoleTokens)
+	s.attest.setDesired(s.cfg.RoleTokens)
+	return s.attestNow(ctx)
 }
 
 // Reload re-reads both secret files. The user map swaps atomically on a clean
@@ -28,8 +29,13 @@ func (s *Server) Reload(ctx context.Context) error {
 	}
 	if rt, err := LoadRoleTokens(s.cfg.RoleTokensFile); err != nil {
 		errs = append(errs, err)
-	} else if err := s.attestAndPublish(ctx, rt); err != nil {
-		errs = append(errs, err) // keep the previously attested snapshot
+	} else {
+		// Always record the new tokens as the desired target so the re-probe
+		// recovers to THEM (not stale ones) even if this attest fails transiently.
+		s.attest.setDesired(rt)
+		if err := s.attestNow(ctx); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }

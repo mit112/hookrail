@@ -42,14 +42,16 @@ func TestInitialAttestPublishes(t *testing.T) {
 	}
 }
 
-func TestReloadSwapsUsersAndRejectsBadRoleTokens(t *testing.T) {
+func TestReloadSwapsUsersAndFailsClosedOnMislabeledTokens(t *testing.T) {
 	stub := whoamiStub(t)
 	defer stub.Close()
 	s := newReloadTestServer(t, stub.URL)
 	if err := s.InitialAttest(context.Background()); err != nil {
 		t.Fatalf("initial attest: %v", err)
 	}
-	prev, _ := s.currentRoleTokens()
+	if _, ok := s.currentRoleTokens(); !ok {
+		t.Fatal("must be attested after initial")
+	}
 
 	// Remove alice; introduce a MISLABELED role-tokens file (admin token on viewer).
 	if err := os.WriteFile(s.cfg.UsersFile, []byte("bob:"+mustHash(t, "pw")+":admin\n"), 0o600); err != nil {
@@ -60,20 +62,40 @@ func TestReloadSwapsUsersAndRejectsBadRoleTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := s.Reload(context.Background())
-	if err == nil {
+	if err := s.Reload(context.Background()); err == nil {
 		t.Fatal("reload must report the attestation failure")
 	}
-	// Users swapped (alice gone)...
+	// Users swapped...
 	if _, ok := s.currentUsers().RoleOf("alice"); ok {
 		t.Fatal("alice should be gone after reload")
 	}
 	if _, ok := s.currentUsers().RoleOf("bob"); !ok {
 		t.Fatal("bob should be present after reload")
 	}
-	// ...but the bad role-token map was NOT published (still the prior snapshot).
+	// ...and the mislabeled tokens fail closed (no active snapshot → 503).
+	if _, ok := s.currentRoleTokens(); ok {
+		t.Fatal("mislabeled role tokens must fail closed, not keep serving")
+	}
+}
+
+func TestReloadKeepsOldSnapshotOnParseError(t *testing.T) {
+	stub := whoamiStub(t)
+	defer stub.Close()
+	s := newReloadTestServer(t, stub.URL)
+	if err := s.InitialAttest(context.Background()); err != nil {
+		t.Fatalf("initial attest: %v", err)
+	}
+	prev, _ := s.currentRoleTokens()
+
+	// A malformed (unparseable) role-tokens file must NOT touch desired/current.
+	if err := os.WriteFile(s.cfg.RoleTokensFile, []byte("garbage-not-role-tokens\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reload(context.Background()); err == nil {
+		t.Fatal("reload must report the parse error")
+	}
 	cur, ok := s.currentRoleTokens()
 	if !ok || cur != prev {
-		t.Fatal("mislabeled role tokens must not be published; prior snapshot must remain")
+		t.Fatal("a parse error must keep the previously attested snapshot serving")
 	}
 }

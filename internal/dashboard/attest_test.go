@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,23 +117,23 @@ func TestAttestStatePublishGetApplyReprobe(t *testing.T) {
 	}
 
 	// A failed re-probe at the current gen clears the active snapshot.
-	src, gen := a.reprobeSource()
-	a.applyReprobe(gen, src, false)
+	src, gen := a.probeTarget()
+	a.applyProbe(gen, src, false)
 	if _, ok := a.get(); ok {
 		t.Fatal("failed re-probe must clear the snapshot")
 	}
 	// A successful re-probe republishes.
-	src, gen = a.reprobeSource()
-	a.applyReprobe(gen, src, true)
+	src, gen = a.probeTarget()
+	a.applyProbe(gen, src, true)
 	if _, ok := a.get(); !ok {
 		t.Fatal("successful re-probe must republish")
 	}
 
 	// A stale re-probe (wrong gen) is dropped: a newer publish must survive a
 	// late failing probe carrying an old gen.
-	_, staleGen := a.reprobeSource()
+	_, staleGen := a.probeTarget()
 	a.publish(rt) // bumps gen
-	a.applyReprobe(staleGen, src, false)
+	a.applyProbe(staleGen, src, false)
 	if _, ok := a.get(); !ok {
 		t.Fatal("stale re-probe result must not clear a newer snapshot")
 	}
@@ -156,11 +157,11 @@ func TestAttestConcurrentReloadVsReprobe(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 500; i++ {
-			src, gen := a.reprobeSource()
+			src, gen := a.probeTarget()
 			if src == nil {
 				src = rt
 			}
-			a.applyReprobe(gen, src, i%2 == 0)
+			a.applyProbe(gen, src, i%2 == 0)
 		}
 	}()
 	// Concurrent readers (proxy hot path).
@@ -176,6 +177,61 @@ func TestAttestConcurrentReloadVsReprobe(t *testing.T) {
 	a.publish(rt)
 	if _, ok := a.get(); !ok {
 		t.Fatal("expected an attested snapshot after a final publish")
+	}
+}
+
+func TestRotationRecoversToNewTokensAfterTransientOutage(t *testing.T) {
+	nViewer := "hkadm_" + strings.Repeat("d", 48)
+	nOperator := "hkadm_" + strings.Repeat("e", 48)
+	nAdmin := "hkadm_" + strings.Repeat("f", 48)
+	oldSet := map[string]string{tokViewer: "viewer", tokOperator: "operator", tokAdmin: "admin"}
+	newSet := map[string]string{nViewer: "viewer", nOperator: "operator", nAdmin: "admin"}
+	var down, acceptNew atomic.Bool
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		set := oldSet
+		if acceptNew.Load() {
+			set = newSet // rotation done upstream: old tokens revoked
+		}
+		role, ok := set[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+		if !ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"role": role})
+	}))
+	defer stub.Close()
+
+	s := newReloadTestServer(t, stub.URL)
+	if err := s.InitialAttest(context.Background()); err != nil {
+		t.Fatalf("initial attest (old tokens): %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.StartReprobe(ctx, 5*time.Millisecond)
+
+	// Rotate the role-tokens file to the NEW set while upstream is transiently down.
+	newFile := "viewer:" + nViewer + "\noperator:" + nOperator + "\nadmin:" + nAdmin + "\n"
+	if err := os.WriteFile(s.cfg.RoleTokensFile, []byte(newFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	down.Store(true)
+	if err := s.Reload(context.Background()); err == nil {
+		t.Fatal("reload during outage should report the attest failure")
+	}
+
+	// Upstream returns with the rotation applied: NEW tokens valid, OLD revoked.
+	acceptNew.Store(true)
+	down.Store(false)
+
+	// The re-probe must recover to the NEW tokens automatically (no extra SIGHUP).
+	waitFor(t, 2*time.Second, func() bool { _, ok := s.currentRoleTokens(); return ok })
+	cur, _ := s.currentRoleTokens()
+	if tok, _ := cur.For(admin.RoleAdmin); tok != nAdmin {
+		t.Fatalf("recovered to wrong tokens: active admin token = %q, want NEW", tok)
 	}
 }
 
