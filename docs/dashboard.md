@@ -45,6 +45,40 @@ docker compose -f deploy/compose/docker-compose.yml up -d --build dashboard && e
 | `HOOKRAIL_DASHBOARD_SESSION_TTL` | `12h` | Session cookie TTL (Go duration) |
 | `HOOKRAIL_DASHBOARD_INSECURE_COOKIE` | `false` | Allow cookies over plain HTTP (dev only) |
 
+## Admin API roles (RBAC R1)
+
+The admin API (`:8082`) supports three role-scoped bearer tokens, ranked
+`viewer < operator < admin`:
+
+- **viewer** — read-only: list/get endpoints, subscriptions, deliveries, DLQ,
+  and ordered keys.
+- **operator** — viewer plus day-2 operations: replay a dead letter and skip a
+  delivery.
+- **admin** — operator plus configuration and secrets: create/update/delete
+  endpoints and subscriptions, rotate secrets, and manage admin tokens.
+
+Each route enforces a minimum role; a valid token below it gets `403`. A
+missing, invalid, or revoked token gets `401`.
+
+### Tokens
+
+Scoped tokens are minted by an existing **admin** caller against the admin API
+directly — the dashboard does not proxy token management in R1:
+
+- `POST /v1/admin-tokens` with `{ "role": "operator", "label": "ci-replayer" }`
+  returns the plaintext `hkadm_…` token **once** (the response is `no-store`).
+- `GET /v1/admin-tokens` lists token metadata (never the secret).
+- `DELETE /v1/admin-tokens/{id}` revokes a token; it stops working immediately.
+
+Only the SHA-256 of each token is stored. At most 256 active tokens are allowed.
+
+### Break-glass
+
+`HOOKRAIL_ADMIN_TOKEN` remains valid as a full-**admin** bootstrap/break-glass
+credential, independent of the database. The dashboard forwards this token, so
+every dashboard user has admin rights until per-user dashboard roles arrive in a
+later slice.
+
 ## Limits
 
 The dashboard's documented residual risks — single shared password (no RBAC),

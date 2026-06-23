@@ -424,10 +424,80 @@ paths:
                   next_cursor: { type: string }
         "400": { $ref: "#/components/responses/Problem" }
 
+  # ── RBAC R1: admin-token management (admin role required) ───────────────────
+  /v1/admin-tokens:
+    post:
+      summary: Mint a role-scoped admin token (admin role required)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, label]
+              properties:
+                role: { type: string, enum: [viewer, operator, admin] }
+                label: { type: string, maxLength: 200 }
+      responses:
+        "201":
+          description: Created — plaintext token returned once
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: "no-store (token in body)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminTokenCreated"
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    get:
+      summary: List admin tokens (metadata only; admin role required)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: Paginated list of admin-token metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AdminToken"
+                  next_cursor: { type: string }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin-tokens/{id}:
+    delete:
+      summary: Revoke an admin token (idempotent; admin role required)
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "204":
+          description: Revoked (idempotent; no body)
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     producerKey: { type: http, scheme: bearer }
-    adminToken: { type: http, scheme: bearer, description: "HOOKRAIL_ADMIN_TOKEN — internal admin surface only" }
+    adminToken: { type: http, scheme: bearer, description: "Env break-glass admin token (HOOKRAIL_ADMIN_TOKEN) OR a role-scoped admin token (hkadm_…). Internal admin surface only. Admin routes return 401 (missing/invalid/revoked credential) or 403 (valid token, role too low for the route)." }
   schemas:
     Endpoint:
       type: object
@@ -512,6 +582,23 @@ components:
         blocked_since: { type: string, format: date-time, nullable: true }
         backlog_count: { type: integer }
         oldest_successor_age_sec: { type: number, nullable: true }
+    AdminToken:
+      type: object
+      required: [id, role, label, created_at]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [viewer, operator, admin] }
+        label: { type: string }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+    AdminTokenCreated:
+      type: object
+      required: [id, token, role, label]
+      properties:
+        id: { type: string }
+        token: { type: string, description: "plaintext; shown once at creation, never retrievable again" }
+        role: { type: string, enum: [viewer, operator, admin] }
+        label: { type: string }
   responses:
     Problem:
       description: RFC 7807 problem
