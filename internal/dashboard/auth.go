@@ -17,6 +17,7 @@ type Server struct {
 	cfg      Config
 	sessions *Sessions
 	usersPtr atomic.Pointer[Users]
+	attest   *attestState // role-token attestation gate (M3/M4)
 	thr      *throttle
 	log      *slog.Logger
 	now      func() time.Time
@@ -26,6 +27,7 @@ func NewServer(cfg Config) *Server {
 	s := &Server{
 		cfg:      cfg,
 		sessions: NewSessions(cfg),
+		attest:   newAttestState(),
 		thr:      newThrottle(10, time.Minute),
 		log:      slog.Default(),
 		now:      time.Now,
