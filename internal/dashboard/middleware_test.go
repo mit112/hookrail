@@ -3,6 +3,7 @@ package dashboard
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,25 @@ func TestRequireSessionGoodCookie(t *testing.T) {
 	h(w, r)
 	if w.Code != 200 {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+func TestRequireSessionRejectsDeletedUser(t *testing.T) {
+	srv := testServer(t)
+	cookie := authedCookie(t, srv) // subject "alice"
+	// Remove alice from the live user set (simulates a reload after deletion).
+	u, err := ParseUsers(strings.NewReader("bob:" + mustHash(t, "x") + ":admin\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.usersPtr.Store(u)
+	h := srv.requireSession(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	r := httptest.NewRequest("GET", "/v1/endpoints", nil)
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("deleted user: want 401, got %d", w.Code)
 	}
 }
 

@@ -13,8 +13,15 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 			httpx.Problem(w, http.StatusUnauthorized, "not authenticated", "log in first")
 			return
 		}
-		if _, ok := s.sessions.Valid(c.Value, s.now()); !ok {
+		sub, ok := s.sessions.Valid(c.Value, s.now())
+		if !ok {
 			httpx.Problem(w, http.StatusUnauthorized, "not authenticated", "log in first")
+			return
+		}
+		// Re-resolve the subject against the live user set so a deleted user's
+		// outstanding cookie is rejected immediately (RBAC R2 revocation, D3).
+		if _, ok := s.currentUsers().RoleOf(sub); !ok {
+			httpx.Problem(w, http.StatusUnauthorized, "not authenticated", "user no longer exists")
 			return
 		}
 		switch r.Method {
