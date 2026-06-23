@@ -11,6 +11,7 @@ from hookrail.errors import (
     AuthenticationError,
     BadRequestError,
     ConflictError,
+    ForbiddenError,
     HookrailAPIError,
     HookrailConfigError,
     NotFoundError,
@@ -89,6 +90,7 @@ def compute_delay(
 _STATUS_ERRORS: dict[int, type[HookrailAPIError]] = {
     400: BadRequestError,
     401: AuthenticationError,
+    403: ForbiddenError,
     404: NotFoundError,
     409: ConflictError,
     413: PayloadTooLargeError,

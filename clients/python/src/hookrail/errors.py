@@ -44,6 +44,10 @@ class AuthenticationError(HookrailAPIError):
     """401 — missing or invalid producer key."""
 
 
+class ForbiddenError(HookrailAPIError):
+    """403 — producer key is not authorized to publish to this topic."""
+
+
 class NotFoundError(HookrailAPIError):
     """404 — unknown event id (see design §0: may also mask a backend outage)."""
 
