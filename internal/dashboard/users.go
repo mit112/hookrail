@@ -47,8 +47,8 @@ func ParseUsers(r io.Reader) (*Users, error) {
 		if name == "" || strings.ContainsAny(name, " \t") {
 			return nil, fmt.Errorf("users line %d: invalid username", line)
 		}
-		if !strings.HasPrefix(hash, "$argon2id$") {
-			return nil, fmt.Errorf("users line %d: hash must be argon2id PHC", line)
+		if !validPHC(hash) {
+			return nil, fmt.Errorf("users line %d: hash is not a valid in-policy argon2id PHC", line)
 		}
 		role, ok := admin.ParseRole(roleStr)
 		if !ok {

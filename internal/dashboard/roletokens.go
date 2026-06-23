@@ -5,11 +5,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/mit112/hookrail/internal/admin"
 )
+
+// adminTokenRe matches the exact minted admin-token syntax: "hkadm_" + 48 hex
+// chars (24 random bytes hex-encoded). Validated at parse time so a fat-fingered
+// token fails closed at startup instead of becoming a delayed per-role outage.
+var adminTokenRe = regexp.MustCompile(`^hkadm_[0-9a-f]{48}$`)
 
 // RoleTokens maps each role to its upstream admin token (hkadm_…). All three
 // roles are required; the token's actual role is later attested via /v1/whoami.
@@ -43,8 +49,8 @@ func ParseRoleTokens(r io.Reader) (*RoleTokens, error) {
 			return nil, fmt.Errorf("role-tokens line %d: invalid role %q", line, roleStr)
 		}
 		tok = strings.TrimSpace(tok)
-		if !strings.HasPrefix(tok, "hkadm_") {
-			return nil, fmt.Errorf("role-tokens line %d: token must be hkadm_-prefixed", line)
+		if !adminTokenRe.MatchString(tok) {
+			return nil, fmt.Errorf("role-tokens line %d: token must be a minted hkadm_ token (hkadm_ + 48 hex)", line)
 		}
 		if _, dup := rt.m[role]; dup {
 			return nil, fmt.Errorf("role-tokens line %d: duplicate role", line)
