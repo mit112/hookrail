@@ -270,6 +270,142 @@ func TestPostEventOrderingKeyTooLong(t *testing.T) {
 	}
 }
 
+func TestPostEventForbiddenTopic403(t *testing.T) {
+	q := &nopQueue{}
+	s := testStore(t)
+	ctx := context.Background()
+	_, key, err := s.CreateProducerKey(ctx, "narrow", []string{"orders.*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000), 24*time.Hour, 256, 10000)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp := post(t, ts, key, "", `{"topic":"payments.captured","payload":{"n":1}}`)
+	//nolint:errcheck
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, want application/problem+json", ct)
+	}
+	// No event was written for the forbidden topic.
+	var n int
+	if err := s.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM events WHERE topic='payments.captured'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("events written = %d, want 0 (denied before ingest)", n)
+	}
+	// The forbidden result is not a replayable idempotency record: a retry with
+	// the same Idempotency-Key still 403s rather than replaying a 202.
+	if len(q.published) != 0 {
+		t.Fatalf("queue published %v, want nothing on a denied topic", q.published)
+	}
+}
+
+func TestPostEventForbiddenTopicNotReplayable(t *testing.T) {
+	// The scope check must run BEFORE the idempotency replay path: a forbidden
+	// request — even with an Idempotency-Key, retried — 403s every time, never
+	// records a replayable idempotency row, and never replays a prior 202. This
+	// guards against a refactor that moves authz below IngestEvent.
+	q := &nopQueue{}
+	s := testStore(t)
+	ctx := context.Background()
+	_, key, err := s.CreateProducerKey(ctx, "narrow-idem", []string{"orders.*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000), 24*time.Hour, 256, 10000)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	body := `{"topic":"payments.captured","payload":{"n":1}}`
+	for i, want := range []int{http.StatusForbidden, http.StatusForbidden} {
+		resp := post(t, ts, key, "idem-forbidden-1", body)
+		if resp.StatusCode != want {
+			//nolint:errcheck,gosec
+			resp.Body.Close()
+			t.Fatalf("attempt %d status = %d, want %d", i, resp.StatusCode, want)
+		}
+		if h := resp.Header.Get("Idempotent-Replay"); h != "" {
+			//nolint:errcheck,gosec
+			resp.Body.Close()
+			t.Fatalf("attempt %d got Idempotent-Replay=%q, want none (denial is not a replayable result)", i, h)
+		}
+		//nolint:errcheck,gosec
+		resp.Body.Close()
+	}
+	// No idempotency row was recorded for the denied request.
+	var n int
+	if err := s.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM idempotency_keys WHERE idem_key='idem-forbidden-1'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("idempotency_keys rows = %d, want 0 (denied before idempotency record)", n)
+	}
+	if len(q.published) != 0 {
+		t.Fatalf("queue published %v, want nothing", q.published)
+	}
+}
+
+func TestPostEventScopeDBErrorReturns503(t *testing.T) {
+	// A DB error from the scope check must surface as 503 (never silent-accept).
+	// Dropping only producer_key_scopes lets auth's producer_keys lookup succeed
+	// while AuthorizeProducerTopic's query fails — isolating the scope-check path.
+	q := &nopQueue{}
+	s := testStore(t)
+	ctx := context.Background()
+	_, key, err := s.CreateProducerKey(ctx, "dberr", []string{"*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Pool.Exec(ctx, `DROP TABLE producer_key_scopes`); err != nil {
+		t.Fatal(err)
+	}
+	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000), 24*time.Hour, 256, 10000)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp := post(t, ts, key, "", `{"topic":"orders.created","payload":{"n":1}}`)
+	//nolint:errcheck
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 on scope-check DB error", resp.StatusCode)
+	}
+}
+
+func TestPostEventInScopeTopicAccepted(t *testing.T) {
+	q := &nopQueue{}
+	s := testStore(t)
+	ctx := context.Background()
+	_, key, err := s.CreateProducerKey(ctx, "narrow2", []string{"orders.*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epID, _, err := s.CreateEndpoint(ctx, masterKey(), "https://consumer.example/hook", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSubscription(ctx, "orders.*", epID, 8); err != nil {
+		t.Fatal(err)
+	}
+	srv := api.New(s, q, ratelimit.NewRegistry(1000, 1000), 24*time.Hour, 256, 10000)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp := post(t, ts, key, "", `{"topic":"orders.created","payload":{"n":1}}`)
+	//nolint:errcheck
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	ts, _, _ := newServer(t, &nopQueue{})
 	resp, err := http.Get(ts.URL + "/healthz")

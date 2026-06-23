@@ -11,7 +11,7 @@ import (
 var (
 	IngestEventsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "hookrail_ingest_events_total",
-		Help: "Events accepted at ingress, by result (accepted|replayed|conflict|rejected).",
+		Help: "Events accepted at ingress, by result (accepted|replayed|conflict|rejected|forbidden).",
 	}, []string{"result"})
 
 	DeliveriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{

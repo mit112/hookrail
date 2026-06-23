@@ -115,6 +115,22 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Producer-key topic scope (RBAC R3): a forbidden topic writes no event and
+	// is rejected before the idempotency replay path. Immutable scopes ⇒ no TOCTOU
+	// between this check and the insert.
+	if err := s.store.AuthorizeProducerTopic(r.Context(), keyID, req.Topic); err != nil {
+		if errors.Is(err, store.ErrTopicForbidden) {
+			obs.IngestEventsTotal.WithLabelValues("forbidden").Inc()
+			problem(w, http.StatusForbidden, "topic not permitted",
+				"this producer key is not authorized to publish to this topic")
+			return
+		}
+		slog.Error("scope check failed", "err", err)
+		obs.IngestEventsTotal.WithLabelValues("rejected").Inc()
+		problem(w, http.StatusServiceUnavailable, "ingest unavailable", "could not authorize the event")
+		return
+	}
+
 	res, err := s.store.IngestEvent(r.Context(), store.IngestParams{
 		ProducerKeyID:       keyID,
 		Topic:               req.Topic,
