@@ -110,7 +110,7 @@ func main() {
 			os.Exit(1)
 		}
 		defer s.Close()
-		id, plaintext, err := s.CreateProducerKey(context.Background(), *name)
+		id, plaintext, err := s.CreateProducerKey(context.Background(), *name, []string{"*"})
 		if err != nil {
 			slog.Error("create-producer-key", "err", err)
 			os.Exit(1)
@@ -189,7 +189,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	_, key, err := s.CreateProducerKey(ctx, "demo")
+	_, key, err := s.CreateProducerKey(ctx, "demo", []string{"*"})
 	if err != nil {
 		slog.Error("create key", "err", err)
 		os.Exit(1)

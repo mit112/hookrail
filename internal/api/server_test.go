@@ -87,7 +87,7 @@ func newServer(t *testing.T, q api.Publisher) (*httptest.Server, *store.Store, s
 	t.Helper()
 	s := testStore(t)
 	ctx := context.Background()
-	_, key, err := s.CreateProducerKey(ctx, "api-test")
+	_, key, err := s.CreateProducerKey(ctx, "api-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

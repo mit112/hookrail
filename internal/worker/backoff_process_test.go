@@ -18,7 +18,7 @@ import (
 func seedWithBackoff(t *testing.T, s *store.Store, url string) string {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := s.CreateProducerKey(ctx, "bo")
+	keyID, _, err := s.CreateProducerKey(ctx, "bo", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

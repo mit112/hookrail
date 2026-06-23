@@ -28,7 +28,7 @@ func TestMigrateUpDown(t *testing.T) {
 func TestSeedHelpersRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	keyID, plaintext, err := s.CreateProducerKey(ctx, "test")
+	keyID, plaintext, err := s.CreateProducerKey(ctx, "test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

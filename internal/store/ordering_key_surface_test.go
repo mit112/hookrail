@@ -17,7 +17,7 @@ func TestOrderingKeySurfacedInDLQAndBrowse(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 
-	keyID, _, err := st.CreateProducerKey(ctx, "surface-test")
+	keyID, _, err := st.CreateProducerKey(ctx, "surface-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

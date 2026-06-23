@@ -21,7 +21,7 @@ func orderedServer(t *testing.T, backlogMax int) (*httptest.Server, string) {
 	t.Helper()
 	s := testStore(t)
 	ctx := context.Background()
-	_, key, err := s.CreateProducerKey(ctx, "backlog-test")
+	_, key, err := s.CreateProducerKey(ctx, "backlog-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

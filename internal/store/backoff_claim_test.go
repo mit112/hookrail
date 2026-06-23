@@ -14,7 +14,7 @@ import (
 func TestClaimReturnsBackoffPolicy(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	keyID, _, _ := s.CreateProducerKey(ctx, "bp")
+	keyID, _, _ := s.CreateProducerKey(ctx, "bp", []string{"*"})
 	epID, _, _ := s.CreateEndpoint(ctx, [32]byte{}, "https://example.com/h", "")
 	_, _ = s.CreateSubscriptionFull(ctx, store.SubInput{
 		TopicPattern: "bp.*", EndpointID: epID, MaxAttempts: 8,

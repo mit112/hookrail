@@ -65,7 +65,7 @@ func schedTestStore(t *testing.T) *store.Store {
 func schedSeed(t *testing.T, s *store.Store, pattern string) string {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := s.CreateProducerKey(ctx, "sched")
+	keyID, _, err := s.CreateProducerKey(ctx, "sched", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

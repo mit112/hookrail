@@ -79,7 +79,7 @@ func masterKey() [32]byte { var k [32]byte; copy(k[:], "0123456789abcdef01234567
 func seed(t *testing.T, s *store.Store, url string) (string, string) {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := s.CreateProducerKey(ctx, "worker-test")
+	keyID, _, err := s.CreateProducerKey(ctx, "worker-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

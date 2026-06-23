@@ -15,7 +15,7 @@ import (
 func mkDueDelivery(t *testing.T, s *store.Store, label string) string {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := s.CreateProducerKey(ctx, "due-test-"+label)
+	keyID, _, err := s.CreateProducerKey(ctx, "due-test-"+label, []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

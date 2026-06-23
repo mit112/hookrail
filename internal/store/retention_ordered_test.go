@@ -19,7 +19,7 @@ func TestRetentionKeepsBlockingHeadPayload(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 
-	keyID, _, err := st.CreateProducerKey(ctx, "ret-ord-test")
+	keyID, _, err := st.CreateProducerKey(ctx, "ret-ord-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

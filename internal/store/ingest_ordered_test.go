@@ -14,7 +14,7 @@ import (
 func seedOrderedPipeline(t *testing.T, s *store.Store, topicPattern string) (keyID, subID string) {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := s.CreateProducerKey(ctx, "ordered-ingest-test")
+	keyID, _, err := s.CreateProducerKey(ctx, "ordered-ingest-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

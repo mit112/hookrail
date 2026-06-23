@@ -16,7 +16,7 @@ import (
 func seedPipeline(t *testing.T, s *store.Store, patterns ...string) (keyID string) {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := s.CreateProducerKey(ctx, "ingest-test")
+	keyID, _, err := s.CreateProducerKey(ctx, "ingest-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

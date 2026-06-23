@@ -406,7 +406,7 @@ func TestBlockedKeys(t *testing.T) {
 	ctx := context.Background()
 
 	// Set up: subscription with ordered=true
-	keyID, _, err := st.CreateProducerKey(ctx, "test")
+	keyID, _, err := st.CreateProducerKey(ctx, "test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ func (n *noQueue) Ping(context.Context) error                 { return nil }
 func seedPipeline(t *testing.T, s *store.Store, pattern string) string {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := s.CreateProducerKey(ctx, "test")
+	keyID, _, err := s.CreateProducerKey(ctx, "test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

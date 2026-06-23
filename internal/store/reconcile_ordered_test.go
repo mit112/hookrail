@@ -21,7 +21,7 @@ func (p *recordingPublish) fn(_ context.Context, id string) error {
 func setupOrderedKey(t *testing.T, st *store.Store, key string, n int) (subID string, dids []string) {
 	t.Helper()
 	ctx := context.Background()
-	keyID, _, err := st.CreateProducerKey(ctx, "reconcile-test")
+	keyID, _, err := st.CreateProducerKey(ctx, "reconcile-test", []string{"*"})
 	if err != nil {
 		t.Fatal(err)
 	}

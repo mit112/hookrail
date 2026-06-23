@@ -2,16 +2,29 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"crypto/rand"
+
+	"github.com/jackc/pgx/v5"
 
 	hcrypto "github.com/mit112/hookrail/internal/crypto"
 )
 
-// CreateProducerKey stores a new key hashed (§4) and returns (id, plaintext).
-// The plaintext is shown once and never stored.
-func (s *Store) CreateProducerKey(ctx context.Context, name string) (id, plaintext string, err error) {
+// CreateProducerKey stores a new key hashed (§4) plus its topic scopes, in one
+// transaction, and returns (id, plaintext). At least one scope is required;
+// each pattern is validated and de-duplicated. The plaintext is shown once and
+// never stored.
+func (s *Store) CreateProducerKey(ctx context.Context, name string, scopes []string) (id, plaintext string, err error) {
+	scopes = dedupePatterns(scopes)
+	if len(scopes) == 0 {
+		return "", "", ErrNoScopes
+	}
+	for _, p := range scopes {
+		if err = ValidateTopicPattern(p); err != nil {
+			return "", "", err
+		}
+	}
 	raw := make([]byte, 24)
 	if _, err = rand.Read(raw); err != nil {
 		return "", "", err
@@ -19,10 +32,28 @@ func (s *Store) CreateProducerKey(ctx context.Context, name string) (id, plainte
 	plaintext = "hk_" + hex.EncodeToString(raw)
 	hash := sha256.Sum256([]byte(plaintext))
 	id = NewID()
-	_, err = s.Pool.Exec(ctx,
+
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if _, err = tx.Exec(ctx,
 		`INSERT INTO producer_keys (id, key_hash, name) VALUES ($1, $2, $3)`,
-		id, hash[:], name)
-	return id, plaintext, err
+		id, hash[:], name); err != nil {
+		return "", "", err
+	}
+	for _, p := range scopes {
+		if _, err = tx.Exec(ctx,
+			`INSERT INTO producer_key_scopes (producer_key_id, topic_pattern) VALUES ($1, $2)`,
+			id, p); err != nil {
+			return "", "", err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", "", err
+	}
+	return id, plaintext, nil
 }
 
 // LookupProducerKey resolves a presented plaintext key to its id by hash.
