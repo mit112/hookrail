@@ -23,11 +23,24 @@ var proxyClient = &http.Client{
 	Timeout:       0, // per-request context timeout instead
 }
 
-// proxyAdmin builds a FRESH outbound request to the admin upstream, injecting the admin token.
+// proxyAdmin builds a FRESH outbound request to the admin upstream, injecting the
+// role-matched admin token from the active attested snapshot (RBAC R2, D5/D11).
 func (s *Server) proxyAdmin(w http.ResponseWriter, r *http.Request) {
 	// Reject absolute-form / suspicious request targets — only origin-form paths proxy.
 	if r.URL.IsAbs() || r.URL.Host != "" || !strings.HasPrefix(r.URL.Path, "/v1/") {
 		httpx.Problem(w, http.StatusBadRequest, "bad request target", "only origin-form /v1 paths are proxied")
+		return
+	}
+	sub, role := roleFrom(r.Context())
+	rtSnap, ok := s.currentRoleTokens()
+	if !ok {
+		// No attested snapshot (boot, or a re-probe failed): fail closed. D11.
+		httpx.Problem(w, http.StatusServiceUnavailable, "not ready", "role tokens not attested")
+		return
+	}
+	roleToken, ok := rtSnap.For(role)
+	if !ok {
+		httpx.Problem(w, http.StatusServiceUnavailable, "not ready", "no token for role")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -50,7 +63,7 @@ func (s *Server) proxyAdmin(w http.ResponseWriter, r *http.Request) {
 			out.Header[http.CanonicalHeaderKey(k)] = v
 		}
 	}
-	out.Header.Set("Authorization", "Bearer "+s.cfg.AdminToken)
+	out.Header.Set("Authorization", "Bearer "+roleToken)
 	// SSRF via AdminURL is by design — proxy targets are env-configured upstreams.
 	//nolint:gosec
 	resp, err := proxyClient.Do(out)
@@ -73,6 +86,10 @@ func (s *Server) proxyAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, maxBody))
+	// Per-user audit trail (the BFF is the only layer that knows the human, D10).
+	s.log.Info("dashboard proxy",
+		"user", sub, "role", role.String(),
+		"method", r.Method, "path", r.URL.Path, "status", resp.StatusCode)
 }
 
 type route struct {

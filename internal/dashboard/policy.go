@@ -21,6 +21,12 @@ func withRole(ctx context.Context, sub string, role admin.Role) context.Context 
 	return context.WithValue(ctx, roleCtxKey, principalCtx{sub: sub, role: role})
 }
 
+// roleFrom returns the (sub, role) stashed by requireRole.
+func roleFrom(ctx context.Context) (string, admin.Role) {
+	p, _ := ctx.Value(roleCtxKey).(principalCtx)
+	return p.sub, p.role
+}
+
 // requireRole validates the session, resolves the caller's LIVE role from the
 // user file (never the cookie), enforces a per-route minimum role, applies the
 // CSRF/content-type guards for mutating methods, and stashes (sub, role) in the

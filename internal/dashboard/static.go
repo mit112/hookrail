@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+
+	"github.com/mit112/hookrail/internal/httpx"
 )
 
 //go:embed all:dist
@@ -29,7 +31,13 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	http.ServeFileFS(w, r, sub, p)
 }
 
-func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	// best-effort: report ready (admin reachability proven by the proxy on demand)
+func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
+	// Mirror the in-process attestation state: ready only when an attested
+	// role-token snapshot is active (RBAC R2, D11). This is an orchestration
+	// signal; the security boundary is the proxy gate in proxyAdmin.
+	if _, ok := s.currentRoleTokens(); !ok {
+		httpx.Problem(w, http.StatusServiceUnavailable, "not ready", "role tokens not attested")
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }

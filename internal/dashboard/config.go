@@ -12,7 +12,6 @@ import (
 type Config struct {
 	SessionKey     []byte
 	SessionPrev    []byte // optional; nil when unset
-	AdminToken     string // legacy single upstream token (removed once proxy migrates, M4)
 	ProducerKey    string
 	AdminURL       string
 	IngressURL     string
@@ -45,7 +44,6 @@ func LoadConfig() (Config, error) {
 		if len(p) < 32 { return c, errors.New("HOOKRAIL_DASHBOARD_SESSION_KEY_PREVIOUS must be >= 32 bytes") }
 		c.SessionPrev = []byte(p)
 	}
-	if c.AdminToken, err = req("HOOKRAIL_ADMIN_TOKEN"); err != nil { return c, err }
 	keyFile, err := req("HOOKRAIL_PRODUCER_KEY_FILE")
 	if err != nil { return c, err }
 	// Path from env var, by design.

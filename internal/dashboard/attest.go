@@ -31,6 +31,9 @@ func (a *attestState) publish(rt *RoleTokens) { a.current.Store(rt.clone()) }
 
 func (a *attestState) clear() { a.current.Store(nil) }
 
+// currentRoleTokens returns the active attested snapshot, if any.
+func (s *Server) currentRoleTokens() (*RoleTokens, bool) { return s.attest.get() }
+
 // attestProbe confirms each configured token's /v1/whoami role equals its
 // declared role. Any mismatch or probe error fails the whole attestation.
 func attestProbe(ctx context.Context, adminURL string, rt *RoleTokens) error {
