@@ -83,11 +83,14 @@ func LoadConfig() (Config, error) {
 	}
 	c.AttestInterval = 60 * time.Second
 	if v := os.Getenv("HOOKRAIL_DASHBOARD_ATTEST_INTERVAL"); v != "" {
-		if d, derr := time.ParseDuration(v); derr == nil {
-			c.AttestInterval = d
-		} else {
+		d, derr := time.ParseDuration(v)
+		if derr != nil {
 			return c, fmt.Errorf("bad HOOKRAIL_DASHBOARD_ATTEST_INTERVAL: %w", derr)
 		}
+		if d <= 0 {
+			return c, fmt.Errorf("HOOKRAIL_DASHBOARD_ATTEST_INTERVAL must be > 0")
+		}
+		c.AttestInterval = d
 	}
 	return c, nil
 }

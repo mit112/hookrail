@@ -42,6 +42,16 @@ func TestLoadConfigRequiresUserAndTokenFiles(t *testing.T) {
 	if _, err := LoadConfig(); err == nil { t.Fatal("expected error without role-tokens file") }
 }
 
+func TestLoadConfigRejectsBadAttestInterval(t *testing.T) {
+	for _, v := range []string{"0", "-5s", "nonsense"} {
+		setMinEnv(t)
+		t.Setenv("HOOKRAIL_DASHBOARD_ATTEST_INTERVAL", v)
+		if _, err := LoadConfig(); err == nil {
+			t.Errorf("attest interval %q: expected error", v)
+		}
+	}
+}
+
 func TestLoadConfigMissingSessionKeyTooShort(t *testing.T) {
 	setMinEnv(t)
 	t.Setenv("HOOKRAIL_DASHBOARD_SESSION_KEY", "tooshort")

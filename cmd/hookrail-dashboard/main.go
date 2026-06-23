@@ -25,15 +25,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Hot-reload users + role tokens on SIGHUP (bounded revocation, D3).
-	app.InstallSIGHUP(ctx)
-
-	// Attest the startup role tokens before serving. On failure we still start:
+	// Attest the startup role tokens BEFORE enabling SIGHUP/reprobe so no
+	// concurrent publish can race the initial attest. On failure we still start:
 	// proxyAdmin/readyz fail closed (503) until an attested snapshot exists, and
 	// the periodic re-probe recovers once the admin API is reachable (D11).
 	if err := app.InitialAttest(ctx); err != nil {
 		slog.Warn("initial role-token attestation failed; starting unready", "err", err)
 	}
+	// Hot-reload users + role tokens on SIGHUP (bounded revocation, D3).
+	app.InstallSIGHUP(ctx)
 	// Continuously re-attest so a revoked/rotated token fails closed (D11).
 	app.StartReprobe(ctx, cfg.AttestInterval)
 

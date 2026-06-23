@@ -94,6 +94,10 @@ func (s *Server) attestAndPublish(ctx context.Context, rt *RoleTokens) error {
 // where nothing ever published by falling back to the configured startup tokens.
 // A gen check ensures a probe result is dropped if a reload superseded it.
 func (s *Server) StartReprobe(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		s.log.Error("attestation re-probe disabled: non-positive interval", "interval", interval)
+		return
+	}
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
