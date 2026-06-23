@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mit112/hookrail/internal/admin"
 )
 
 // Test helper only — no dynamic Secure flag needed.
@@ -13,9 +15,16 @@ func authedCookie(t *testing.T, s *Server) *http.Cookie {
 	return &http.Cookie{Name: s.cookieName(), Value: s.sessions.Issue(s.now(), "alice")}
 }
 
-func TestRequireSessionNoCookie(t *testing.T) {
+// subjectCookie issues a session cookie for an arbitrary subject (test helper).
+//
+//nolint:gosec
+func subjectCookie(s *Server, sub string) *http.Cookie {
+	return &http.Cookie{Name: s.cookieName(), Value: s.sessions.Issue(s.now(), sub)}
+}
+
+func TestRequireRoleNoCookie(t *testing.T) {
 	srv := testServer(t)
-	h := srv.requireSession(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h := srv.requireRole(admin.RoleViewer, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest("GET", "/v1/endpoints", nil))
 	if w.Code != http.StatusUnauthorized {
@@ -23,9 +32,9 @@ func TestRequireSessionNoCookie(t *testing.T) {
 	}
 }
 
-func TestRequireSessionGoodCookie(t *testing.T) {
-	srv := testServer(t)
-	h := srv.requireSession(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+func TestRequireRoleGoodCookieViewer(t *testing.T) {
+	srv := testServer(t) // alice is admin
+	h := srv.requireRole(admin.RoleViewer, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	r := httptest.NewRequest("GET", "/v1/endpoints", nil)
 	r.AddCookie(authedCookie(t, srv))
 	w := httptest.NewRecorder()
@@ -35,16 +44,27 @@ func TestRequireSessionGoodCookie(t *testing.T) {
 	}
 }
 
-func TestRequireSessionRejectsDeletedUser(t *testing.T) {
+func TestRequireRoleInsufficientRole(t *testing.T) {
+	srv := testServerWithUsers(t, "viewerbob:"+mustHash(t, "pw")+":viewer\n")
+	h := srv.requireRole(admin.RoleAdmin, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+	r := httptest.NewRequest("GET", "/v1/endpoints", nil)
+	r.AddCookie(subjectCookie(srv, "viewerbob"))
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("viewer→admin: want 403, got %d", w.Code)
+	}
+}
+
+func TestRequireRoleRejectsDeletedUser(t *testing.T) {
 	srv := testServer(t)
 	cookie := authedCookie(t, srv) // subject "alice"
-	// Remove alice from the live user set (simulates a reload after deletion).
 	u, err := ParseUsers(strings.NewReader("bob:" + mustHash(t, "x") + ":admin\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv.usersPtr.Store(u)
-	h := srv.requireSession(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h := srv.requireRole(admin.RoleViewer, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	r := httptest.NewRequest("GET", "/v1/endpoints", nil)
 	r.AddCookie(cookie)
 	w := httptest.NewRecorder()
@@ -54,9 +74,9 @@ func TestRequireSessionRejectsDeletedUser(t *testing.T) {
 	}
 }
 
-func TestRequireSessionRejectsFormPost(t *testing.T) {
+func TestRequireRoleRejectsFormPost(t *testing.T) {
 	srv := testServer(t)
-	h := srv.requireSession(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h := srv.requireRole(admin.RoleAdmin, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	r := httptest.NewRequest("POST", "/v1/endpoints", nil)
 	r.AddCookie(authedCookie(t, srv))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")

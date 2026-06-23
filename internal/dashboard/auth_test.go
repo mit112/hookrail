@@ -3,6 +3,7 @@ package dashboard
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -18,6 +19,23 @@ func testServer(t *testing.T) *Server {
 }
 
 // setMinEnv provisions user alice/pw-alice (admin) — see config_test.go.
+
+// testServerWithUsers builds a Server whose users file holds the given content.
+func testServerWithUsers(t *testing.T, usersContent string) *Server {
+	t.Helper()
+	setMinEnv(t)
+	dir := t.TempDir()
+	uf := dir + "/users"
+	if err := os.WriteFile(uf, []byte(usersContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOOKRAIL_DASHBOARD_USERS_FILE", uf)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewServer(cfg)
+}
 
 func TestLoginWrongPassword(t *testing.T) {
 	srv := testServer(t)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mit112/hookrail/internal/admin"
 	"github.com/mit112/hookrail/internal/httpx"
 )
 
@@ -75,18 +76,29 @@ func (s *Server) proxyAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 type route struct {
-	method string
-	path   string // ServeMux pattern, e.g. "/v1/endpoints/{id}"
+	method  string
+	path    string // ServeMux pattern, e.g. "/v1/endpoints/{id}"
+	minRole admin.Role
 }
 
+// adminRoutes is the proxied allowlist. minRole MUST mirror the upstream
+// internal/admin registry; policy_test.go asserts no drift.
 func (s *Server) adminRoutes() []route {
 	return []route{
-		{"POST", "/v1/endpoints"}, {"GET", "/v1/endpoints"},
-		{"GET", "/v1/endpoints/{id}"}, {"PATCH", "/v1/endpoints/{id}"}, {"DELETE", "/v1/endpoints/{id}"},
-		{"POST", "/v1/endpoints/{id}/rotate-secret"},
-		{"POST", "/v1/subscriptions"}, {"GET", "/v1/subscriptions"},
-		{"GET", "/v1/subscriptions/{id}"}, {"PATCH", "/v1/subscriptions/{id}"}, {"DELETE", "/v1/subscriptions/{id}"},
-		{"GET", "/v1/dlq"}, {"POST", "/v1/dlq/{delivery_id}/replay"},
-		{"GET", "/v1/deliveries"}, {"GET", "/v1/deliveries/{id}"},
+		{"GET", "/v1/endpoints", admin.RoleViewer},
+		{"POST", "/v1/endpoints", admin.RoleAdmin},
+		{"GET", "/v1/endpoints/{id}", admin.RoleViewer},
+		{"PATCH", "/v1/endpoints/{id}", admin.RoleAdmin},
+		{"DELETE", "/v1/endpoints/{id}", admin.RoleAdmin},
+		{"POST", "/v1/endpoints/{id}/rotate-secret", admin.RoleAdmin},
+		{"POST", "/v1/subscriptions", admin.RoleAdmin},
+		{"GET", "/v1/subscriptions", admin.RoleViewer},
+		{"GET", "/v1/subscriptions/{id}", admin.RoleViewer},
+		{"PATCH", "/v1/subscriptions/{id}", admin.RoleAdmin},
+		{"DELETE", "/v1/subscriptions/{id}", admin.RoleAdmin},
+		{"GET", "/v1/dlq", admin.RoleViewer},
+		{"POST", "/v1/dlq/{delivery_id}/replay", admin.RoleOperator},
+		{"GET", "/v1/deliveries", admin.RoleViewer},
+		{"GET", "/v1/deliveries/{id}", admin.RoleViewer},
 	}
 }
