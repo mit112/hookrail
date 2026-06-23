@@ -10,7 +10,8 @@ test.describe("Dashboard e2e", () => {
       timeout: 10_000,
     });
 
-    // 2. Log in with dev password
+    // 2. Log in as the dev admin user (username + password)
+    await page.fill('input[aria-label="Username"]', "admin");
     await page.fill('input[type="password"]', "dev-dashboard-pw");
     await page.click('button:has-text("Sign in")');
 

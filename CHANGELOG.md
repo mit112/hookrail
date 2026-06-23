@@ -4,6 +4,14 @@ All notable changes documented here. Honest history — early entries include de
 
 ## [Unreleased]
 
+### RBAC R2 — Dashboard users & role-aware UI
+
+- **Per-user dashboard accounts** from a mounted secret file (`username:argon2id-hash:role`), replacing the single shared password. Login takes a username + password (uniform-failure verify); the `hookrail-dash-hash` helper mints file entries.
+- **Role in the session, resolved live.** The cookie carries only a signed `sub`; the role is resolved per request from the live user file, so deleting/downgrading a user takes effect on their next request after a SIGHUP reload. **Breaking:** the legacy shared-password variable and the dashboard's `HOOKRAIL_ADMIN_TOKEN` are removed; provision `HOOKRAIL_DASHBOARD_USERS_FILE` + `HOOKRAIL_DASHBOARD_ROLE_TOKENS_FILE`.
+- **Role-matched, attested upstream tokens.** The BFF forwards one of three role-scoped admin tokens chosen by the caller's live role, and **attests** each token against the new admin `GET /v1/whoami` (startup + periodic re-probe). A mislabeled/revoked token or unreachable admin API fails closed (`503`, `/readyz` not ready) and self-recovers. Per-route minimum roles mirror the R1 registry (drift-tested); `/api/test-event` requires operator.
+- **Role-aware SPA:** username login; create/edit/delete/rotate gated to admin, replay + send-test-event to operator; privileged routes guarded against direct-URL access. UI gating is cosmetic — the BFF + admin API are the enforcement boundary.
+- **`hookrail-ctl create-admin-token`** for bootstrap minting; compose + k8s provision the users + role-token secrets automatically.
+
 ### RBAC R1 — Admin API role-based access control
 
 - **Three role-scoped admin tokens** ranked `viewer < operator < admin`, enforced per-route in the admin API middleware (`viewer` reads; `operator` adds replay/skip; `admin` adds config, secret rotation, and token management). A valid token below a route's minimum role gets `403`; missing/invalid/revoked gets `401`; a credential-store outage gets `503` (never fail-open).
