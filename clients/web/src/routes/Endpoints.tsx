@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useEndpoints } from "../query/endpoints";
 import type { TEndpointRow } from "../api/schemas";
+import { RequireRole } from "../auth/role";
 
 export function Endpoints() {
   const [cursors, setCursors] = useState<string[]>([""]);
@@ -32,7 +33,7 @@ export function Endpoints() {
   return (
     <div>
       <h1>Endpoints</h1>
-      <Link to="/endpoints/new">+ New endpoint</Link>
+      <RequireRole min="admin"><Link to="/endpoints/new">+ New endpoint</Link></RequireRole>
       <table>
         <thead>
           <tr>

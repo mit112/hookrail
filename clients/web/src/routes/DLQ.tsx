@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useDLQ, type DLQFilters } from "../query/dlq";
 import { useReplay } from "../query/replay";
 import type { TDLQRow } from "../api/schemas";
+import { RequireRole } from "../auth/role";
 
 export function DLQ() {
   const [cursors, setCursors] = useState<string[]>([""]);
@@ -82,9 +83,11 @@ export function DLQ() {
               <td>{d.replayed_at || "—"}</td>
               <td>
                 {!d.replayed_at && (
-                  <button onClick={() => replay.mutate(d.delivery_id)} disabled={replay.isPending}>
-                    Replay
-                  </button>
+                  <RequireRole min="operator">
+                    <button onClick={() => replay.mutate(d.delivery_id)} disabled={replay.isPending}>
+                      Replay
+                    </button>
+                  </RequireRole>
                 )}
               </td>
             </tr>

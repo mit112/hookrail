@@ -4,6 +4,7 @@ import { useCreateSubscription, useUpdateSubscription, useDeleteSubscription, Cr
 import { useSubscription } from "../query/subscriptions";
 import { ApiProblem } from "../api/client";
 import type { TSubscriptionRow } from "../api/schemas";
+import { RequireRole } from "../auth/role";
 
 interface SubscriptionFormProps {
   subscription?: TSubscriptionRow;
@@ -169,18 +170,20 @@ export function SubscriptionForm({ subscription, onSuccess }: SubscriptionFormPr
         )}
         {clientError && <p role="alert">{clientError}</p>}
         {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={isPending}>
-          {isEdit ? "Save" : "Create"}
-        </button>
-        {isEdit && (
-          <button
-            type="button"
-            onClick={() => setShowConfirm(true)}
-            disabled={isPending}
-          >
-            Delete
+        <RequireRole min="admin">
+          <button type="submit" disabled={isPending}>
+            {isEdit ? "Save" : "Create"}
           </button>
-        )}
+          {isEdit && (
+            <button
+              type="button"
+              onClick={() => setShowConfirm(true)}
+              disabled={isPending}
+            >
+              Delete
+            </button>
+          )}
+        </RequireRole>
       </form>
       {showConfirm && (
         <div role="dialog">

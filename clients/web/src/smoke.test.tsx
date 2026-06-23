@@ -7,7 +7,7 @@ import { http, HttpResponse } from "msw";
 import { App } from "./App";
 
 const server = setupServer(
-  http.get("/api/session", () => HttpResponse.json({})),
+  http.get("/api/session", () => HttpResponse.json({ authenticated: true, role: "admin", username: "alice" })),
   http.get("/v1/endpoints", () => HttpResponse.json({ items: [], next_cursor: "" })),
   http.get("/v1/deliveries", () => HttpResponse.json({ items: [], next_cursor: "" })),
 );

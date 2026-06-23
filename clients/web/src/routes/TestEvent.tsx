@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTestEvent } from "../query/testEvent";
 import { ApiProblem } from "../api/client";
+import { RequireRole } from "../auth/role";
 
 export function TestEvent() {
   const [topic, setTopic] = useState("");
@@ -71,9 +72,11 @@ export function TestEvent() {
         </div>
         {clientError && <p role="alert">{clientError}</p>}
         {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={mutation.isPending}>
-          Send
-        </button>
+        <RequireRole min="operator">
+          <button type="submit" disabled={mutation.isPending}>
+            Send
+          </button>
+        </RequireRole>
       </form>
       {result && (
         <div>

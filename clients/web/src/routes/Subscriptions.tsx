@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useSubscriptions } from "../query/subscriptions";
 import type { TSubscriptionRow } from "../api/schemas";
+import { RequireRole } from "../auth/role";
 
 export function Subscriptions() {
   const [cursors, setCursors] = useState<string[]>([""]);
@@ -32,7 +33,7 @@ export function Subscriptions() {
   return (
     <div>
       <h1>Subscriptions</h1>
-      <Link to="/subscriptions/new">New Subscription</Link>
+      <RequireRole min="admin"><Link to="/subscriptions/new">New Subscription</Link></RequireRole>
       <table>
         <thead>
           <tr>

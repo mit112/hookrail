@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { useEndpoint } from "../query/endpoints";
 import { useRotateSecret } from "../query/rotateSecret";
 import { SecretReveal } from "../components/SecretReveal";
+import { RequireRole } from "../auth/role";
 
 export function EndpointDetail() {
   const { id } = useParams<{ id: string }>();
@@ -42,12 +43,14 @@ export function EndpointDetail() {
           </>
         )}
       </dl>
-      <Link to={`/endpoints/${data.id}/edit`}>Edit</Link>
-      {" | "}
-      <button type="button" onClick={handleRotate} disabled={rotateMutation.isPending}>
-        {rotateMutation.isPending ? "Rotating…" : "Rotate secret"}
-      </button>
-      {" | "}
+      <RequireRole min="admin">
+        <Link to={`/endpoints/${data.id}/edit`}>Edit</Link>
+        {" | "}
+        <button type="button" onClick={handleRotate} disabled={rotateMutation.isPending}>
+          {rotateMutation.isPending ? "Rotating…" : "Rotate secret"}
+        </button>
+        {" | "}
+      </RequireRole>
       <Link to="/endpoints">← Back to endpoints</Link>
       {rotateError && <p role="alert">{rotateError}</p>}
       {secret && <SecretReveal secret={secret} onClose={() => { setSecret(null); rotateMutation.reset(); }} />}

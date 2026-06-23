@@ -9,9 +9,10 @@ describe("Login", () => {
     const spy = vi.spyOn(session, "login").mockResolvedValue();
     const onSuccess = vi.fn();
     render(<Login onSuccess={onSuccess} />);
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: "alice" } });
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("pw"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("alice", "pw"));
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
   });
 });

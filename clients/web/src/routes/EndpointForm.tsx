@@ -4,6 +4,7 @@ import { useCreateEndpoint, useUpdateEndpoint, useDeleteEndpoint } from "../quer
 import { useEndpoint } from "../query/endpoints";
 import { ApiProblem } from "../api/client";
 import type { TEndpointRow } from "../api/schemas";
+import { RequireRole } from "../auth/role";
 import { SecretReveal } from "../components/SecretReveal";
 
 interface EndpointFormProps {
@@ -104,18 +105,20 @@ export function EndpointForm({ endpoint, onSecret, onSecretReset, onSuccess }: E
         </div>
         {clientError && <p role="alert">{clientError}</p>}
         {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={isPending}>
-          {isEdit ? "Save" : "Create"}
-        </button>
-        {isEdit && (
-          <button
-            type="button"
-            onClick={() => setShowConfirm(true)}
-            disabled={isPending}
-          >
-            Delete
+        <RequireRole min="admin">
+          <button type="submit" disabled={isPending}>
+            {isEdit ? "Save" : "Create"}
           </button>
-        )}
+          {isEdit && (
+            <button
+              type="button"
+              onClick={() => setShowConfirm(true)}
+              disabled={isPending}
+            >
+              Delete
+            </button>
+          )}
+        </RequireRole>
       </form>
       {showConfirm && (
         <div role="dialog">

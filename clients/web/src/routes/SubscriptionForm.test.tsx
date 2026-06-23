@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
+import { RoleProvider } from "../auth/role";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import { SubscriptionForm } from "./SubscriptionForm";
@@ -20,7 +21,7 @@ function TestWrapper({ children }: { children: React.ReactNode }) {
   });
   return (
     <MemoryRouter>
-      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+      <QueryClientProvider client={qc}><RoleProvider role="admin">{children}</RoleProvider></QueryClientProvider>
     </MemoryRouter>
   );
 }

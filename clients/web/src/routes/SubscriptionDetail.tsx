@@ -1,5 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useSubscription } from "../query/subscriptions";
+import { RequireRole } from "../auth/role";
 
 export function SubscriptionDetail() {
   const { id } = useParams<{ id: string }>();
@@ -36,7 +37,7 @@ export function SubscriptionDetail() {
           </>
         )}
       </dl>
-      <Link to={`/subscriptions/${data.id}/edit`}>Edit</Link>
+      <RequireRole min="admin"><Link to={`/subscriptions/${data.id}/edit`}>Edit</Link></RequireRole>
       {" | "}
       <Link to="/subscriptions">← Back to subscriptions</Link>
     </div>
