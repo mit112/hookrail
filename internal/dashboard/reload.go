@@ -17,27 +17,20 @@ func (s *Server) InitialAttest(ctx context.Context) error {
 	return s.attestNow(ctx)
 }
 
-// Reload re-reads both secret files. The user map swaps atomically on a clean
-// parse; the role-token map is staged, attested, and published only on success.
-// Old state is retained on any error (never crash, never publish unattested).
+// Reload re-reads both secret files atomically: BOTH must parse before anything
+// is applied, so a read/parse error in either file changes nothing (no partial
+// apply of users against stale tokens). Once both parse, the user map swaps and
+// the new tokens become the desired target; attestation then activates them or
+// fails closed (desired still tracks the new tokens for re-probe recovery).
 func (s *Server) Reload(ctx context.Context) error {
-	var errs []error
-	if u, err := LoadUsers(s.cfg.UsersFile); err != nil {
-		errs = append(errs, err)
-	} else {
-		s.usersPtr.Store(u)
+	u, uerr := LoadUsers(s.cfg.UsersFile)
+	rt, rerr := LoadRoleTokens(s.cfg.RoleTokensFile)
+	if uerr != nil || rerr != nil {
+		return errors.Join(uerr, rerr) // keep both old; apply nothing
 	}
-	if rt, err := LoadRoleTokens(s.cfg.RoleTokensFile); err != nil {
-		errs = append(errs, err)
-	} else {
-		// Always record the new tokens as the desired target so the re-probe
-		// recovers to THEM (not stale ones) even if this attest fails transiently.
-		s.attest.setDesired(rt)
-		if err := s.attestNow(ctx); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	s.usersPtr.Store(u)
+	s.attest.setDesired(rt)
+	return s.attestNow(ctx)
 }
 
 // InstallSIGHUP reloads both secret files on SIGHUP, keeping previous state on

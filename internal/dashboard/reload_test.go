@@ -99,3 +99,34 @@ func TestReloadKeepsOldSnapshotOnParseError(t *testing.T) {
 		t.Fatal("a parse error must keep the previously attested snapshot serving")
 	}
 }
+
+// A reload that adds a new admin user but has a malformed role-tokens file must
+// apply NEITHER change (no partial apply of principals against stale tokens).
+func TestReloadIsAtomicAcrossUsersAndTokens(t *testing.T) {
+	stub := whoamiStub(t)
+	defer stub.Close()
+	s := newReloadTestServer(t, stub.URL)
+	if err := s.InitialAttest(context.Background()); err != nil {
+		t.Fatalf("initial attest: %v", err)
+	}
+	prev, _ := s.currentRoleTokens()
+
+	// New users file promotes a brand-new admin; role-tokens file is malformed.
+	if err := os.WriteFile(s.cfg.UsersFile,
+		[]byte("alice:"+mustHash(t, "pw")+":admin\nmallory:"+mustHash(t, "pw")+":admin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.cfg.RoleTokensFile, []byte("totally-broken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reload(context.Background()); err == nil {
+		t.Fatal("reload must report the malformed token file")
+	}
+	// Neither the user set nor the active tokens changed.
+	if _, ok := s.currentUsers().RoleOf("mallory"); ok {
+		t.Fatal("new admin must NOT be applied when the token file is malformed")
+	}
+	if cur, ok := s.currentRoleTokens(); !ok || cur != prev {
+		t.Fatal("active tokens must be unchanged on a malformed reload")
+	}
+}
