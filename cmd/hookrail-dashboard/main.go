@@ -34,6 +34,8 @@ func main() {
 	if err := app.InitialAttest(ctx); err != nil {
 		slog.Warn("initial role-token attestation failed; starting unready", "err", err)
 	}
+	// Continuously re-attest so a revoked/rotated token fails closed (D11).
+	app.StartReprobe(ctx, cfg.AttestInterval)
 
 	slog.Info("hookrail-dashboard listening", "addr", cfg.Addr)
 	srv := &http.Server{

@@ -25,6 +25,7 @@ type Config struct {
 	RoleTokensFile string
 	Users          *Users
 	RoleTokens     *RoleTokens
+	AttestInterval time.Duration
 }
 
 func LoadConfig() (Config, error) {
@@ -79,6 +80,14 @@ func LoadConfig() (Config, error) {
 	}
 	if c.RoleTokens, err = LoadRoleTokens(c.RoleTokensFile); err != nil {
 		return c, err
+	}
+	c.AttestInterval = 60 * time.Second
+	if v := os.Getenv("HOOKRAIL_DASHBOARD_ATTEST_INTERVAL"); v != "" {
+		if d, derr := time.ParseDuration(v); derr == nil {
+			c.AttestInterval = d
+		} else {
+			return c, fmt.Errorf("bad HOOKRAIL_DASHBOARD_ATTEST_INTERVAL: %w", derr)
+		}
 	}
 	return c, nil
 }

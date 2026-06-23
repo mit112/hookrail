@@ -52,6 +52,35 @@ func (s *Server) attestAndPublish(ctx context.Context, rt *RoleTokens) error {
 	return nil
 }
 
+// StartReprobe periodically re-attests the last-intended snapshot. On failure it
+// clears the active snapshot (proxyAdmin/readyz fail closed); on later success it
+// republishes (recovery). Continuous enforcement of the D11 contract.
+func (s *Server) StartReprobe(ctx context.Context, interval time.Duration) {
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				src := s.attest.last.Load()
+				if src == nil {
+					continue // nothing has ever attested
+				}
+				if err := attestProbe(ctx, s.cfg.AdminURL, src); err != nil {
+					s.attest.clear()
+					s.log.Error("attestation re-probe failed; role tokens cleared", "err", err)
+				} else if _, ok := s.attest.get(); !ok {
+					// src is already a private clone; republish directly.
+					s.attest.current.Store(src)
+					s.log.Info("attestation re-probe recovered; role tokens republished")
+				}
+			}
+		}
+	}()
+}
+
 // attestProbe confirms each configured token's /v1/whoami role equals its
 // declared role. Any mismatch or probe error fails the whole attestation.
 func attestProbe(ctx context.Context, adminURL string, rt *RoleTokens) error {
