@@ -136,11 +136,14 @@ func (s *Server) authz(min Role, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, status := s.resolvePrincipal(r)
 		switch status {
+		case 0:
+			// Authenticated — fall through to the role check below.
 		case http.StatusUnauthorized:
 			httpx.Problem(w, status, "invalid credentials", "Authorization: Bearer <admin token> required")
 			return
-		case http.StatusServiceUnavailable:
-			httpx.Problem(w, status, "not ready", "could not verify credentials")
+		default:
+			// 503 and ANY unexpected status fail closed (never reach a handler).
+			httpx.Problem(w, http.StatusServiceUnavailable, "not ready", "could not verify credentials")
 			return
 		}
 		if p.role < min {
