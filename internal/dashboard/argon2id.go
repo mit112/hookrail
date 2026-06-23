@@ -55,10 +55,11 @@ func verifyPassword(pw, phc string) bool {
 		return false
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(want) == 0 {
+	if err != nil || len(want) == 0 || len(want) > 64 {
 		return false
 	}
-	got := argon2.IDKey([]byte(pw), salt, tcost, mem, par, uint32(len(want)))
+	// len(want) is bounded to [1,64] above, so the uint32 conversion cannot overflow.
+	got := argon2.IDKey([]byte(pw), salt, tcost, mem, par, uint32(len(want))) //nolint:gosec
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
