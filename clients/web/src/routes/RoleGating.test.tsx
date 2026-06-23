@@ -4,8 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
-import { RoleProvider, type Role } from "../auth/role";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { RoleProvider, useRole, roleAtLeast, type Role } from "../auth/role";
 import { Endpoints } from "./Endpoints";
+import { EndpointNew } from "./EndpointForm";
 import { DLQ } from "./DLQ";
 
 const server = setupServer(
@@ -55,5 +57,37 @@ describe("role-gated controls", () => {
     renderAs("operator", <DLQ />);
     await screen.findByText("d1");
     expect(screen.getByRole("button", { name: /replay/i })).toBeInTheDocument();
+  });
+});
+
+// RoleRoute mirrors App.tsx's route guard for direct-URL access tests.
+function RoleRoute({ min, children }: { min: Role; children: React.ReactNode }) {
+  return roleAtLeast(useRole(), min) ? <>{children}</> : <Navigate to="/endpoints" replace />;
+}
+
+describe("route-level role guards (direct URL)", () => {
+  function mountAt(role: Role, path: string) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <QueryClientProvider client={qc}>
+          <RoleProvider role={role}>
+            <Routes>
+              <Route path="/endpoints" element={<div>Endpoints List</div>} />
+              <Route path="/endpoints/new" element={<RoleRoute min="admin"><EndpointNew /></RoleRoute>} />
+            </Routes>
+          </RoleProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+  }
+  it("redirects a viewer away from /endpoints/new", async () => {
+    mountAt("viewer", "/endpoints/new");
+    await screen.findByText("Endpoints List");
+    expect(screen.queryByRole("button", { name: /create/i })).not.toBeInTheDocument();
+  });
+  it("lets an admin reach /endpoints/new", async () => {
+    mountAt("admin", "/endpoints/new");
+    expect(await screen.findByRole("button", { name: /create/i })).toBeInTheDocument();
   });
 });
