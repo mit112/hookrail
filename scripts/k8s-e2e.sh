@@ -36,9 +36,20 @@ kubectl -n "$NS" wait --for=condition=complete --timeout=300s job/migrate
 kubectl -n "$NS" wait --for=condition=complete --timeout=120s job/db-bootstrap
 # host-side producer-key provisioning (the app image has no kubectl — fold #8):
 kubectl -n "$NS" wait --for=condition=complete --timeout=120s job/dashboard-keygen
-KEY=$(kubectl -n "$NS" logs job/dashboard-keygen | /usr/bin/sed -n 's/^producer_key=//p')
+KEYLOG=$(kubectl -n "$NS" logs job/dashboard-keygen)
+KEY=$(echo "$KEYLOG" | /usr/bin/sed -n 's/^producer_key=//p')
+TV=$(echo "$KEYLOG" | /usr/bin/sed -n 's/^role_token_viewer=//p')
+TO=$(echo "$KEYLOG" | /usr/bin/sed -n 's/^role_token_operator=//p')
+TA=$(echo "$KEYLOG" | /usr/bin/sed -n 's/^role_token_admin=//p')
+UHASH=$(echo "$KEYLOG" | /usr/bin/sed -n 's/^users_hash=//p')
 [ -n "$KEY" ] || { echo "no producer key from keygen job"; exit 1; }
+[ -n "$TV" ] && [ -n "$TO" ] && [ -n "$TA" ] || { echo "missing role tokens from keygen job"; exit 1; }
+[ -n "$UHASH" ] || { echo "no users hash from keygen job"; exit 1; }
 kubectl -n "$NS" create secret generic hookrail-dashboard-producer-key --from-literal=producer_key="$KEY"
+kubectl -n "$NS" create secret generic hookrail-dashboard-role-tokens \
+  --from-literal=role_tokens="$(printf 'viewer:%s\noperator:%s\nadmin:%s\n' "$TV" "$TO" "$TA")"
+kubectl -n "$NS" create secret generic hookrail-dashboard-users \
+  --from-literal=dashboard_users="admin:${UHASH}:admin"
 for d in api worker scheduler admin dashboard; do kubectl -n "$NS" rollout status deploy/$d --timeout=120s; done
 # --- k8s-smoke assertions ---
 for d in api worker scheduler admin dashboard; do

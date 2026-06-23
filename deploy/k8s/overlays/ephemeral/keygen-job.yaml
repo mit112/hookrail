@@ -22,7 +22,17 @@ spec:
       containers:
         - name: keygen
           image: hookrail
-          command: ["hookrail-ctl", "create-producer-key", "-name", "dashboard"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              hookrail-ctl create-producer-key -name dashboard
+              for r in viewer operator admin; do
+                printf 'role_token_%s=' "$r"
+                hookrail-ctl create-admin-token -role "$r" | awk -F= '/^admin_token=/{print $2}'
+              done
+              printf 'users_hash='
+              hookrail-dash-hash -hash-only -password dev-dashboard-pw
           env:
             - name: DATABASE_URL
               valueFrom:

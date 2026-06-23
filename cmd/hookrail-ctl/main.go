@@ -18,7 +18,7 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate|retention|create-producer-key> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: hookrail-ctl <seed|migrate|retention|create-producer-key|create-admin-token> [flags]")
 }
 
 func wantsHelp(args []string) bool {
@@ -116,6 +116,34 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("producer_key=%s\nkey_id=%s\n", plaintext, id)
+		return
+	}
+	if os.Args[1] == "create-admin-token" {
+		fs := flag.NewFlagSet("create-admin-token", flag.ExitOnError)
+		role := fs.String("role", "", "role: viewer|operator|admin")
+		label := fs.String("label", "dashboard", "human label for the token")
+		_ = fs.Parse(os.Args[2:])
+		if *role != "viewer" && *role != "operator" && *role != "admin" {
+			slog.Error("create-admin-token", "err", "role must be viewer|operator|admin")
+			os.Exit(2)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		s, err := store.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			slog.Error("store", "err", err)
+			os.Exit(1)
+		}
+		defer s.Close()
+		id, plaintext, err := s.CreateAdminToken(context.Background(), *role, *label)
+		if err != nil {
+			slog.Error("create-admin-token", "err", err)
+			os.Exit(1)
+		}
+		fmt.Printf("admin_token=%s\ntoken_id=%s\n", plaintext, id)
 		return
 	}
 	if os.Args[1] != "seed" {

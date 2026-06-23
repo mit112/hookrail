@@ -62,7 +62,21 @@ services:
     restart: "no"
     entrypoint: ["/bin/sh","-c"]
     command:
-      - 'hookrail-ctl create-producer-key -name dashboard | awk -F= "/^producer_key=/{print \$2}" > /run/secrets/producer_key && chmod 0644 /run/secrets/producer_key'
+      # NOTE: $$ escapes a literal $ so docker compose does not interpolate
+      # these shell variables at config-parse time.
+      - |
+        set -e
+        hookrail-ctl create-producer-key -name dashboard | awk -F= '/^producer_key=/{print $$2}' > /run/secrets/producer_key
+        chmod 0644 /run/secrets/producer_key
+        : > /run/secrets/role_tokens
+        for r in viewer operator admin; do
+          tok=$$(hookrail-ctl create-admin-token -role "$$r" | awk -F= '/^admin_token=/{print $$2}')
+          echo "$$r:$$tok" >> /run/secrets/role_tokens
+        done
+        chmod 0644 /run/secrets/role_tokens
+        h=$$(hookrail-dash-hash -hash-only -password dev-dashboard-pw)
+        echo "admin:$$h:admin" > /run/secrets/dashboard_users
+        chmod 0644 /run/secrets/dashboard_users
     environment: *hookrail-env
     volumes: [dashboard-secret:/run/secrets]
     depends_on:
@@ -148,12 +162,12 @@ services:
       target: dashboard
     command: ["hookrail-dashboard"]
     environment:
-      HOOKRAIL_ADMIN_TOKEN: dev-admin-token-001
       HOOKRAIL_ADMIN_URL: http://admin:8082
       HOOKRAIL_INGRESS_URL: http://api:8080
-      HOOKRAIL_DASHBOARD_PASSWORD: dev-dashboard-pw
       HOOKRAIL_DASHBOARD_SESSION_KEY: dev-session-key-0123456789abcdef0123
       HOOKRAIL_PRODUCER_KEY_FILE: /run/secrets/producer_key
+      HOOKRAIL_DASHBOARD_USERS_FILE: /run/secrets/dashboard_users
+      HOOKRAIL_DASHBOARD_ROLE_TOKENS_FILE: /run/secrets/role_tokens
       HOOKRAIL_DASHBOARD_INSECURE_COOKIE: "true"
     volumes: [dashboard-secret:/run/secrets:ro]
     ports: ["8085:8085"]
