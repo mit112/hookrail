@@ -80,6 +80,7 @@ func (s *Server) routes() []adminRoute {
 		{RouteInfo{"GET", "/v1/deliveries/{id}", RoleViewer}, s.getDelivery},
 		{RouteInfo{"POST", "/v1/deliveries/{id}/skip", RoleOperator}, s.skipDelivery},
 		{RouteInfo{"GET", "/v1/ordered-keys", RoleViewer}, s.listOrderedKeys},
+		{RouteInfo{"GET", "/v1/whoami", RoleViewer}, s.whoami},
 		// Token management (handlers stubbed in M2, real in M3). Admin-only.
 		{RouteInfo{"POST", "/v1/admin-tokens", RoleAdmin}, s.createAdminToken},
 		{RouteInfo{"GET", "/v1/admin-tokens", RoleAdmin}, s.listAdminTokens},

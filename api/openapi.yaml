@@ -424,6 +424,26 @@ paths:
                   next_cursor: { type: string }
         "400": { $ref: "#/components/responses/Problem" }
 
+  /v1/whoami:
+    get:
+      summary: Return the authenticated principal's role (any role)
+      description: >
+        Read-only role introspection. Used by the dashboard BFF to attest that
+        each configured role token is actually scoped to its declared role (RBAC R2).
+      servers: [{ url: http://localhost:8082 }]
+      security: [{ adminToken: [] }]
+      responses:
+        "200":
+          description: The caller's role
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [role]
+                properties:
+                  role: { type: string, enum: [viewer, operator, admin] }
+        "401": { $ref: "#/components/responses/Problem" }
+
   # ── RBAC R1: admin-token management (admin role required) ───────────────────
   /v1/admin-tokens:
     post:

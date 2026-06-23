@@ -33,6 +33,7 @@ func TestRouteTablePolicy(t *testing.T) {
 		"GET /v1/deliveries":                    RoleViewer,
 		"GET /v1/deliveries/{id}":               RoleViewer,
 		"GET /v1/ordered-keys":                  RoleViewer,
+		"GET /v1/whoami":                        RoleViewer,
 		"POST /v1/dlq/{delivery_id}/replay":     RoleOperator,
 		"POST /v1/deliveries/{id}/skip":         RoleOperator,
 		"POST /v1/endpoints":                    RoleAdmin,
