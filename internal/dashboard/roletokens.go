@@ -73,6 +73,16 @@ func (rt *RoleTokens) For(role admin.Role) (string, bool) {
 	return tok, ok
 }
 
+// clone returns a deep copy so a published (attested) snapshot is independent of
+// any caller-held reference and can never be mutated in place under readers.
+func (rt *RoleTokens) clone() *RoleTokens {
+	m := make(map[admin.Role]string, len(rt.m))
+	for k, v := range rt.m {
+		m[k] = v
+	}
+	return &RoleTokens{m: m}
+}
+
 // Roles returns the configured roles in ascending privilege order.
 func (rt *RoleTokens) Roles() []admin.Role {
 	out := make([]admin.Role, 0, len(rt.m))

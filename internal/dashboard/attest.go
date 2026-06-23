@@ -25,7 +25,9 @@ func (a *attestState) get() (*RoleTokens, bool) {
 	return rt, rt != nil
 }
 
-func (a *attestState) publish(rt *RoleTokens) { a.current.Store(rt) }
+// publish stores an independent clone so the active snapshot is immutable and
+// decoupled from any caller-held RoleTokens reference.
+func (a *attestState) publish(rt *RoleTokens) { a.current.Store(rt.clone()) }
 
 func (a *attestState) clear() { a.current.Store(nil) }
 

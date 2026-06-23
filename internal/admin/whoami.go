@@ -11,8 +11,10 @@ import (
 // to attest that each configured role token is actually scoped to its declared
 // role (RBAC R2, D11). Read-only and side-effect free.
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
-	p, status := s.resolvePrincipal(r)
-	if status != 0 { // unreachable behind authz, but fail closed
+	// authz already authenticated the caller and stashed the principal; reuse it
+	// (no second store lookup, no nondeterministic re-auth failure).
+	p, ok := principalFrom(r.Context())
+	if !ok { // unreachable behind authz, but fail closed
 		httpx.Problem(w, http.StatusServiceUnavailable, "not ready", "could not verify credentials")
 		return
 	}

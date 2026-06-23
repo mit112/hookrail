@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -8,6 +9,19 @@ import (
 	"github.com/mit112/hookrail/internal/httpx"
 	"github.com/mit112/hookrail/internal/store"
 )
+
+type principalCtxKey struct{}
+
+// withPrincipal stashes the resolved principal so handlers can reuse it instead
+// of re-authenticating (e.g. whoami).
+func withPrincipal(ctx context.Context, p principal) context.Context {
+	return context.WithValue(ctx, principalCtxKey{}, p)
+}
+
+func principalFrom(ctx context.Context) (principal, bool) {
+	p, ok := ctx.Value(principalCtxKey{}).(principal)
+	return p, ok
+}
 
 // Role is an ordered privilege level on the admin API: viewer < operator < admin.
 type Role int
@@ -151,6 +165,6 @@ func (s *Server) authz(min Role, next http.HandlerFunc) http.HandlerFunc {
 			httpx.Problem(w, http.StatusForbidden, "insufficient role", "requires role "+min.String())
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(withPrincipal(r.Context(), p)))
 	}
 }

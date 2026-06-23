@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mit112/hookrail/internal/admin"
 )
 
 func mustParseRoleTokens(t *testing.T, src string) *RoleTokens {
@@ -52,8 +54,12 @@ func TestAttestStatePublishGetClear(t *testing.T) {
 	}
 	rt := mustParseRoleTokens(t, goodRoleTokensFile())
 	a.publish(rt)
-	if got, ok := a.get(); !ok || got != rt {
-		t.Fatal("publish then get must return the snapshot")
+	got, ok := a.get()
+	if !ok {
+		t.Fatal("publish then get must return a snapshot")
+	}
+	if tok, ok := got.For(admin.RoleAdmin); !ok || tok != tokAdmin {
+		t.Fatalf("published snapshot content mismatch: %q", tok)
 	}
 	a.clear()
 	if _, ok := a.get(); ok {
