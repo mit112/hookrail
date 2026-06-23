@@ -38,24 +38,11 @@ func New(s *store.Store, q Publisher, masterKey [32]byte, pol ssrf.Policy, limit
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// Admin surface (design §2) — every /v1/* route is auth-guarded.
-	mux.HandleFunc("POST /v1/endpoints", s.authAdmin(s.createEndpoint))
-	mux.HandleFunc("GET /v1/endpoints", s.authAdmin(s.listEndpoints))
-	mux.HandleFunc("GET /v1/endpoints/{id}", s.authAdmin(s.getEndpoint))
-	mux.HandleFunc("PATCH /v1/endpoints/{id}", s.authAdmin(s.patchEndpoint))
-	mux.HandleFunc("DELETE /v1/endpoints/{id}", s.authAdmin(s.deleteEndpoint))
-	mux.HandleFunc("POST /v1/endpoints/{id}/rotate-secret", s.authAdmin(s.rotateSecret))
-	mux.HandleFunc("POST /v1/subscriptions", s.authAdmin(s.createSubscription))
-	mux.HandleFunc("GET /v1/subscriptions", s.authAdmin(s.listSubscriptions))
-	mux.HandleFunc("GET /v1/subscriptions/{id}", s.authAdmin(s.getSubscription))
-	mux.HandleFunc("PATCH /v1/subscriptions/{id}", s.authAdmin(s.patchSubscription))
-	mux.HandleFunc("DELETE /v1/subscriptions/{id}", s.authAdmin(s.deleteSubscription))
-	mux.HandleFunc("GET /v1/dlq", s.authAdmin(s.listDLQ))
-	mux.HandleFunc("POST /v1/dlq/{delivery_id}/replay", s.authAdmin(s.replayDLQ))
-	mux.HandleFunc("GET /v1/deliveries", s.authAdmin(s.listDeliveries))
-	mux.HandleFunc("GET /v1/deliveries/{id}", s.authAdmin(s.getDelivery))
-	mux.HandleFunc("POST /v1/deliveries/{id}/skip", s.authAdmin(s.skipDelivery))
-	mux.HandleFunc("GET /v1/ordered-keys", s.authAdmin(s.listOrderedKeys))
+	// Admin surface (design §2) — every /v1/* route is registered via the single
+	// routes() registry, each wrapped in authz(minRole) (RBAC R1, authz.go).
+	for _, rt := range s.routes() {
+		mux.HandleFunc(rt.Method+" "+rt.Pattern, s.authz(rt.MinRole, rt.handler))
+	}
 	// Ops routes — NOT auth-guarded (design §1.1, F17).
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /readyz", s.readyz)
