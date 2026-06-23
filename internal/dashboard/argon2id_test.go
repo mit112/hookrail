@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -52,6 +53,12 @@ func TestValidPHCRejectsOutOfPolicy(t *testing.T) {
 		"trailing":      paramsSplice(t, "m=65536,t=2,p=4,x=1"),
 		"bad base64":    "$argon2id$v=19$m=65536,t=2,p=4$!!!$@@@",
 		"wrong version": strings.Replace(mustHash(t, "x"), "v=19", "v=18", 1),
+		"oversized salt": "$argon2id$v=19$m=65536,t=2,p=4$" +
+			base64.RawStdEncoding.EncodeToString(make([]byte, 64)) + "$" +
+			base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
+		"short key": "$argon2id$v=19$m=65536,t=2,p=4$" +
+			base64.RawStdEncoding.EncodeToString(make([]byte, 16)) + "$" +
+			base64.RawStdEncoding.EncodeToString(make([]byte, 16)),
 	}
 	for name, phc := range bad {
 		if validPHC(phc) {

@@ -18,17 +18,12 @@ const (
 	argonKeyLen  = 32
 )
 
-// PHC cost is pinned to the exact canonical cost emitted by hashPassword
-// (m=argonMem,t=argonTime,p=argonPar). A users-file entry with any other cost is
-// rejected at load: this prevents a "valid" but expensive entry from driving
-// request-amplified argon2 work on every login, and keeps the uniform-failure
-// decoy (which uses the canonical cost) timing-matched to real entries. Salt and
-// key lengths are bounded (length variation is not a DoS vector).
-const (
-	phcMinSalt = 8
-	phcMinKey  = 16
-	phcMaxKey  = 64
-)
+// The accepted PHC shape is pinned to EXACTLY what hashPassword emits — the
+// canonical cost (m=argonMem,t=argonTime,p=argonPar) and the canonical salt/key
+// lengths (argonSaltLen/argonKeyLen). hookrail-dash-hash is the only supported
+// generator, so any deviation is a malformed entry and is rejected at users-file
+// load. This (a) prevents a config-driven, request-amplified argon2 DoS and
+// (b) keeps the uniform-failure decoy timing-matched to real entries in full shape.
 
 type phcParts struct {
 	mem  uint32
@@ -62,12 +57,12 @@ func parsePHC(phc string) (phcParts, error) {
 		return p, fmt.Errorf("argon2 cost must equal the canonical m=%d,t=%d,p=%d", argonMem, argonTime, argonPar)
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil || len(salt) < phcMinSalt {
-		return p, fmt.Errorf("bad argon2 salt")
+	if err != nil || len(salt) != argonSaltLen {
+		return p, fmt.Errorf("argon2 salt must be %d bytes", argonSaltLen)
 	}
 	key, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(key) < phcMinKey || len(key) > phcMaxKey {
-		return p, fmt.Errorf("bad argon2 key")
+	if err != nil || len(key) != argonKeyLen {
+		return p, fmt.Errorf("argon2 key must be %d bytes", argonKeyLen)
 	}
 	p.salt, p.key = salt, key
 	return p, nil
@@ -102,8 +97,8 @@ func verifyPassword(pw, phc string) bool {
 	if err != nil {
 		return false
 	}
-	// len(p.key) is bounded to [phcMinKey,phcMaxKey] by parsePHC.
-	got := argon2.IDKey([]byte(pw), p.salt, p.time, p.mem, p.par, uint32(len(p.key))) //nolint:gosec
+	// parsePHC guarantees len(p.key) == argonKeyLen.
+	got := argon2.IDKey([]byte(pw), p.salt, p.time, p.mem, p.par, argonKeyLen)
 	return subtle.ConstantTimeCompare(got, p.key) == 1
 }
 
