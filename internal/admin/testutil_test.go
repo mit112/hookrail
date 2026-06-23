@@ -132,6 +132,9 @@ func do(t *testing.T, srv *admin.Server, method, path string, body any) *httptes
 	}
 	r := httptest.NewRequest(method, path, rdr)
 	r.Header.Set("Authorization", "Bearer "+testToken)
+	if body != nil {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, r)
 	return w

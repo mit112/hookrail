@@ -4,12 +4,21 @@ package admin_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/mit112/hookrail/internal/admin"
 )
+
+func mustJSON(t *testing.T, w *httptest.ResponseRecorder, v any) {
+	t.Helper()
+	if err := json.Unmarshal(w.Body.Bytes(), v); err != nil {
+		t.Fatalf("decode body %q: %v", w.Body.String(), err)
+	}
+}
 
 // reqAs issues a request bearing an arbitrary token (not the env testToken).
 func reqAs(t *testing.T, srv *admin.Server, token, method, path string) int {
@@ -124,5 +133,75 @@ func TestDBOutageIs503NotUnauthorized(t *testing.T) {
 	// and distinct from an authz rejection.
 	if c := reqAs(t, srv, testToken, "GET", "/v1/deliveries"); c == http.StatusUnauthorized || c == http.StatusForbidden {
 		t.Errorf("env token during outage = %d, want authorized past authz", c)
+	}
+}
+
+func TestAdminTokenLifecycle(t *testing.T) {
+	srv, _ := newServer(t)
+
+	// Create (env admin) -> 201, plaintext once, no-store.
+	w := do(t, srv, "POST", "/v1/admin-tokens", map[string]string{"role": "operator", "label": "ci"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201", w.Code)
+	}
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("create Cache-Control = %q, want no-store", w.Header().Get("Cache-Control"))
+	}
+	var created struct{ ID, Token, Role string }
+	mustJSON(t, w, &created)
+	if !strings.HasPrefix(created.Token, "hkadm_") || created.Role != "operator" {
+		t.Fatalf("bad create body: %+v", created)
+	}
+
+	// The new operator token authorizes replay but not endpoint mutation or minting.
+	if c := reqAs(t, srv, created.Token, "POST", "/v1/dlq/x/replay"); c == http.StatusForbidden {
+		t.Error("operator token should pass replay authz")
+	}
+	if c := reqAs(t, srv, created.Token, "POST", "/v1/endpoints"); c != http.StatusForbidden {
+		t.Errorf("operator token POST /v1/endpoints = %d, want 403", c)
+	}
+	if c := reqAs(t, srv, created.Token, "POST", "/v1/admin-tokens"); c != http.StatusForbidden {
+		t.Errorf("operator mint = %d, want 403", c)
+	}
+
+	// List shows it; never a hash/plaintext.
+	lw := do(t, srv, "GET", "/v1/admin-tokens", nil)
+	if lw.Code != http.StatusOK {
+		t.Fatalf("list = %d, want 200", lw.Code)
+	}
+	if strings.Contains(lw.Body.String(), "token_hash") || strings.Contains(lw.Body.String(), created.Token) {
+		t.Error("list leaked hash/plaintext")
+	}
+
+	// Bad role -> 422.
+	if c := do(t, srv, "POST", "/v1/admin-tokens", map[string]string{"role": "root", "label": "x"}).Code; c != http.StatusUnprocessableEntity {
+		t.Errorf("bad role = %d, want 422", c)
+	}
+
+	// Revoke -> 204; re-revoke -> 204; unknown -> 404; revoked token then 401.
+	if c := do(t, srv, "DELETE", "/v1/admin-tokens/"+created.ID, nil).Code; c != http.StatusNoContent {
+		t.Errorf("revoke = %d, want 204", c)
+	}
+	if c := do(t, srv, "DELETE", "/v1/admin-tokens/"+created.ID, nil).Code; c != http.StatusNoContent {
+		t.Errorf("re-revoke = %d, want 204", c)
+	}
+	if c := do(t, srv, "DELETE", "/v1/admin-tokens/nope", nil).Code; c != http.StatusNotFound {
+		t.Errorf("revoke unknown = %d, want 404", c)
+	}
+	if c := reqAs(t, srv, created.Token, "GET", "/v1/deliveries"); c != http.StatusUnauthorized {
+		t.Errorf("revoked token = %d, want 401", c)
+	}
+}
+
+func TestAdminTokenActiveCap(t *testing.T) {
+	srv, s := newServer(t)
+	ctx := context.Background()
+	for i := 0; i < 256; i++ {
+		if _, _, err := s.CreateAdminToken(ctx, "viewer", "bulk"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c := do(t, srv, "POST", "/v1/admin-tokens", map[string]string{"role": "viewer", "label": "over"}).Code; c != http.StatusConflict {
+		t.Errorf("257th token = %d, want 409", c)
 	}
 }

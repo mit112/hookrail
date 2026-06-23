@@ -36,6 +36,33 @@ func (s *Store) CreateAdminToken(ctx context.Context, role, label string) (id, p
 	return id, plaintext, err
 }
 
+// CreateAdminTokenCapped atomically creates a token only if the active
+// (un-revoked) count is below max, avoiding the TOCTOU of a separate
+// count-then-insert. capped=true (no row inserted) when the cap is already
+// reached. The cap is an anti-sprawl bound; a sub-statement race under
+// simultaneous creates could overshoot by a few, which is acceptable.
+func (s *Store) CreateAdminTokenCapped(ctx context.Context, role, label string, max int) (id, plaintext string, capped bool, err error) {
+	raw := make([]byte, 24)
+	if _, err = rand.Read(raw); err != nil {
+		return "", "", false, err
+	}
+	plaintext = "hkadm_" + hex.EncodeToString(raw)
+	hash := sha256.Sum256([]byte(plaintext))
+	id = NewID()
+	ct, err := s.Pool.Exec(ctx,
+		`INSERT INTO admin_tokens (id, token_hash, role, label)
+		 SELECT $1, $2, $3, $4
+		 WHERE (SELECT count(*) FROM admin_tokens WHERE revoked_at IS NULL) < $5`,
+		id, hash[:], role, label, max)
+	if err != nil {
+		return "", "", false, err
+	}
+	if ct.RowsAffected() == 0 {
+		return "", "", true, nil
+	}
+	return id, plaintext, false, nil
+}
+
 // LookupAdminToken resolves a presented plaintext token to (id, role) by hash.
 // Returns ErrNotFound when there is no active (un-revoked) match.
 func (s *Store) LookupAdminToken(ctx context.Context, plaintext string) (string, string, error) {
