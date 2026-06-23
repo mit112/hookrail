@@ -12,10 +12,14 @@ import (
 	"github.com/mit112/hookrail/internal/admin"
 )
 
-// attestState holds the active, attested role-token snapshot. It is nil until
-// the first successful attestation; proxyAdmin fails closed (503) while nil.
+// attestState holds the active, attested role-token snapshot. current is nil
+// until the first successful attestation and is cleared when a re-probe fails;
+// proxyAdmin fails closed (503) while nil. last keeps the most recent intended
+// snapshot so the periodic re-probe can re-attest and recover after a transient
+// upstream failure.
 type attestState struct {
 	current atomic.Pointer[RoleTokens]
+	last    atomic.Pointer[RoleTokens]
 }
 
 func newAttestState() *attestState { return &attestState{} }
@@ -25,14 +29,28 @@ func (a *attestState) get() (*RoleTokens, bool) {
 	return rt, rt != nil
 }
 
-// publish stores an independent clone so the active snapshot is immutable and
-// decoupled from any caller-held RoleTokens reference.
-func (a *attestState) publish(rt *RoleTokens) { a.current.Store(rt.clone()) }
+// publish stores an independent clone (immutable, decoupled from any caller
+// reference) as both the active and the last-intended snapshot.
+func (a *attestState) publish(rt *RoleTokens) {
+	c := rt.clone()
+	a.last.Store(c)
+	a.current.Store(c)
+}
 
+// clear drops the active snapshot (fail closed) but keeps last for re-probe.
 func (a *attestState) clear() { a.current.Store(nil) }
 
 // currentRoleTokens returns the active attested snapshot, if any.
 func (s *Server) currentRoleTokens() (*RoleTokens, bool) { return s.attest.get() }
+
+// attestAndPublish probes rt and, only on success, makes it the active snapshot.
+func (s *Server) attestAndPublish(ctx context.Context, rt *RoleTokens) error {
+	if err := attestProbe(ctx, s.cfg.AdminURL, rt); err != nil {
+		return err
+	}
+	s.attest.publish(rt)
+	return nil
+}
 
 // attestProbe confirms each configured token's /v1/whoami role equals its
 // declared role. Any mismatch or probe error fails the whole attestation.
