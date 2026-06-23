@@ -18,14 +18,13 @@ const (
 	argonKeyLen  = 32
 )
 
-// PHC param bounds. Wide enough for any reasonable argon2id config but tight
-// enough that a malformed/hostile users-file entry cannot panic argon2.IDKey
-// (t=0/p=0 panic) or memory-exhaust the process (huge m) at verify time.
+// PHC cost is pinned to the exact canonical cost emitted by hashPassword
+// (m=argonMem,t=argonTime,p=argonPar). A users-file entry with any other cost is
+// rejected at load: this prevents a "valid" but expensive entry from driving
+// request-amplified argon2 work on every login, and keeps the uniform-failure
+// decoy (which uses the canonical cost) timing-matched to real entries. Salt and
+// key lengths are bounded (length variation is not a DoS vector).
 const (
-	phcMinMem  = 1024            // KiB (1 MiB)
-	phcMaxMem  = 1 << 20         // KiB (1 GiB)
-	phcMaxTime = 16
-	phcMaxPar  = 16
 	phcMinSalt = 8
 	phcMinKey  = 16
 	phcMaxKey  = 64
@@ -59,17 +58,8 @@ func parsePHC(phc string) (phcParts, error) {
 	if trailing != "" {
 		return p, fmt.Errorf("trailing data in argon2 params")
 	}
-	if p.mem < phcMinMem || p.mem > phcMaxMem {
-		return p, fmt.Errorf("argon2 m out of range")
-	}
-	if p.time < 1 || p.time > phcMaxTime {
-		return p, fmt.Errorf("argon2 t out of range")
-	}
-	if p.par < 1 || p.par > phcMaxPar {
-		return p, fmt.Errorf("argon2 p out of range")
-	}
-	if p.mem < 8*uint32(p.par) { // argon2.IDKey precondition
-		return p, fmt.Errorf("argon2 m must be >= 8*p")
+	if p.mem != argonMem || p.time != argonTime || p.par != argonPar {
+		return p, fmt.Errorf("argon2 cost must equal the canonical m=%d,t=%d,p=%d", argonMem, argonTime, argonPar)
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil || len(salt) < phcMinSalt {
