@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/mit112/hookrail/internal/admin"
@@ -15,30 +15,66 @@ import (
 // attestState holds the active, attested role-token snapshot. current is nil
 // until the first successful attestation and is cleared when a re-probe fails;
 // proxyAdmin fails closed (503) while nil. last keeps the most recent intended
-// snapshot so the periodic re-probe can re-attest and recover after a transient
-// upstream failure.
+// snapshot so the periodic re-probe can re-attest and recover. A monotonic gen
+// counter lets the re-probe discard results derived from a snapshot that a
+// concurrent reload has since superseded (no stale clobber/rollback).
 type attestState struct {
-	current atomic.Pointer[RoleTokens]
-	last    atomic.Pointer[RoleTokens]
+	mu      sync.Mutex
+	current *RoleTokens
+	last    *RoleTokens
+	gen     uint64
 }
 
 func newAttestState() *attestState { return &attestState{} }
 
 func (a *attestState) get() (*RoleTokens, bool) {
-	rt := a.current.Load()
-	return rt, rt != nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.current, a.current != nil
 }
 
 // publish stores an independent clone (immutable, decoupled from any caller
-// reference) as both the active and the last-intended snapshot.
+// reference) as both the active and the last-intended snapshot, bumping gen.
 func (a *attestState) publish(rt *RoleTokens) {
 	c := rt.clone()
-	a.last.Store(c)
-	a.current.Store(c)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.last = c
+	a.current = c
+	a.gen++
 }
 
-// clear drops the active snapshot (fail closed) but keeps last for re-probe.
-func (a *attestState) clear() { a.current.Store(nil) }
+// reprobeSource returns the snapshot to re-probe and the gen it was read at.
+func (a *attestState) reprobeSource() (*RoleTokens, uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.last, a.gen
+}
+
+// applyReprobe applies a re-probe outcome iff no publish/clear happened since
+// genBefore (otherwise the result is stale and dropped). On failure it clears
+// the active snapshot; on success it republishes a clone of src if currently
+// cleared. Returns the bump so callers can observe whether it applied.
+func (a *attestState) applyReprobe(genBefore uint64, src *RoleTokens, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.gen != genBefore {
+		return // a concurrent reload superseded this probe
+	}
+	if !ok {
+		if a.current != nil {
+			a.current = nil
+			a.gen++
+		}
+		return
+	}
+	if a.current == nil {
+		c := src.clone()
+		a.current = c
+		a.last = c
+		a.gen++
+	}
+}
 
 // currentRoleTokens returns the active attested snapshot, if any.
 func (s *Server) currentRoleTokens() (*RoleTokens, bool) { return s.attest.get() }
@@ -52,9 +88,11 @@ func (s *Server) attestAndPublish(ctx context.Context, rt *RoleTokens) error {
 	return nil
 }
 
-// StartReprobe periodically re-attests the last-intended snapshot. On failure it
-// clears the active snapshot (proxyAdmin/readyz fail closed); on later success it
-// republishes (recovery). Continuous enforcement of the D11 contract.
+// StartReprobe periodically re-attests the intended snapshot. On failure it
+// clears the active snapshot (proxyAdmin/readyz fail closed); on success it
+// republishes if cleared (recovery). It also recovers from a cold-start failure
+// where nothing ever published by falling back to the configured startup tokens.
+// A gen check ensures a probe result is dropped if a reload superseded it.
 func (s *Server) StartReprobe(ctx context.Context, interval time.Duration) {
 	go func() {
 		t := time.NewTicker(interval)
@@ -64,17 +102,14 @@ func (s *Server) StartReprobe(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				src := s.attest.last.Load()
+				src, gen := s.attest.reprobeSource()
 				if src == nil {
-					continue // nothing has ever attested
+					src = s.cfg.RoleTokens // cold-start fallback: keep trying startup tokens
 				}
-				if err := attestProbe(ctx, s.cfg.AdminURL, src); err != nil {
-					s.attest.clear()
+				err := attestProbe(ctx, s.cfg.AdminURL, src)
+				s.attest.applyReprobe(gen, src, err == nil)
+				if err != nil {
 					s.log.Error("attestation re-probe failed; role tokens cleared", "err", err)
-				} else if _, ok := s.attest.get(); !ok {
-					// src is already a private clone; republish directly.
-					s.attest.current.Store(src)
-					s.log.Info("attestation re-probe recovered; role tokens republished")
 				}
 			}
 		}
