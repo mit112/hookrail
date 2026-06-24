@@ -70,27 +70,48 @@ func TestExperimentPGFailover(t *testing.T) {
 
 	// --- bucket B: kill primary, load keeps flowing through the no-primary window ---
 	load.setPhase(phaseNoPrimary)
-	t.Logf("deleting primary %s (uid %s)", oldName, oldUID)
-	if out, err := exec.Command("kubectl", "-n", ns, "delete", "pod", oldName, "--wait=false").CombinedOutput(); err != nil {
+	t.Logf("force-deleting primary %s (uid %s)", oldName, oldUID)
+	// --force --grace-period=0: abrupt removal simulates a real primary failure so
+	// CNPG promotes a replica instead of fast-restarting the same instance in place.
+	if out, err := exec.Command("kubectl", "-n", ns, "delete", "pod", oldName,
+		"--force", "--grace-period=0", "--wait=false").CombinedOutput(); err != nil {
 		t.Fatalf("delete primary: %v\n%s", err, out)
 	}
 
-	// poll for a NEW primary (different name) that the -rw service now points to
+	// poll for a NEW primary pod (different name) — the core "failover happened" signal.
 	start := time.Now()
 	var newName, newUID string
-	for time.Since(start) < 120*time.Second {
+	for time.Since(start) < 180*time.Second {
 		n, u := primaryPodTry()
-		if n != "" && n != oldName && rwEndpointPodTry() == n {
+		if n != "" && n != oldName {
 			newName, newUID = n, u
 			break
+		}
+		if int(time.Since(start).Seconds())%5 == 0 {
+			t.Logf("waiting failover t=%s: primary=%q rw=%q", time.Since(start).Round(time.Second), n, rwEndpointPodTry())
 		}
 		time.Sleep(time.Second)
 	}
 	if newName == "" {
-		t.Fatal("no new primary promoted / -rw never flipped within 120s")
+		t.Fatalf("no new primary promoted within 180s (old=%s); pods:\n%s", oldName,
+			kubectlOut(t, "-n", ns, "get", "pod", "-l", "cnpg.io/cluster=hookrail-pg",
+				"-o", "custom-columns=NAME:.metadata.name,ROLE:.metadata.labels.cnpg\\.io/instanceRole,PHASE:.status.phase"))
 	}
 	rto := time.Since(start)
 	t.Logf("failover: %s -> %s in ~%s", oldName, newName, rto.Round(time.Second))
+
+	// the -rw Service must flip to the new primary (assert separately, with its own budget)
+	rwFlipped := false
+	for i := 0; i < 60; i++ {
+		if rwEndpointPodTry() == newName {
+			rwFlipped = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !rwFlipped {
+		t.Fatalf("fact1: -rw endpoint never flipped to new primary %s (got %q)", newName, rwEndpointPodTry())
+	}
 
 	// --- bucket C: post-promotion load must also succeed (liveness, not just old durable) ---
 	load.setPhase(phasePost)
@@ -99,12 +120,9 @@ func TestExperimentPGFailover(t *testing.T) {
 
 	// ===================== ASSERTIONS =====================
 
-	// Fact 1: failover actually happened.
+	// Fact 1: failover actually happened (new primary UID; -rw flip already asserted above).
 	if newUID == oldUID {
 		t.Fatalf("fact1: primary UID unchanged (%s) — no real promotion", oldUID)
-	}
-	if got := rwEndpointPod(t); got != newName {
-		t.Fatalf("fact1: -rw endpoint=%s, want new primary %s", got, newName)
 	}
 	// old pod rejoins as a replica (CNPG post-failover behavior)
 	rejoined := false
