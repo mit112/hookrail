@@ -27,6 +27,13 @@ spec:
       owner: hookrail # the migrator role; password from the owner secret below
       secret:
         name: hookrail-db-owner # basic-auth secret (username: hookrail), created per-overlay
+      # The CNPG-provisioned owner is NOT a superuser (unlike the old postgres:16
+      # image where POSTGRES_USER was). Migration 0004 runs `CREATE ROLE
+      # hookrail_app`, which needs CREATEROLE. Grant it once at bootstrap (runs
+      # as superuser). Role attributes are cluster-global, so postInitSQL is the
+      # right hook.
+      postInitSQL:
+        - ALTER ROLE "hookrail" CREATEROLE
   storage:
     size: 1Gi # ephemeral default; prod overlay patches up
   resources:
