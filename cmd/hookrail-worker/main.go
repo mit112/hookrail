@@ -62,7 +62,9 @@ func main() {
 	q := queue.NewWithClient(rdb, cfg.Stream, cfg.Group)
 	defer q.Close()
 	q.MaxLen = cfg.StreamMaxLen
-	if err := q.EnsureGroup(intakeCtx); err != nil {
+	// Bounded retry: in Sentinel mode the master can be briefly unresolvable at boot
+	// (the wait-redis init only gates on a reachable sentinel, not master discovery).
+	if err := q.EnsureGroupWithRetry(intakeCtx, 60*time.Second); err != nil {
 		slog.Error("ensure group", "err", err)
 		os.Exit(1)
 	}

@@ -55,7 +55,8 @@ func main() {
 	q.MaxLen = cfg.StreamMaxLen
 	// The scheduler only XADDs (which auto-creates the stream); the worker is the
 	// sole consumer-group reader and owns NOGROUP recovery after a Sentinel failover.
-	if err := q.EnsureGroup(ctx); err != nil {
+	// Bounded retry so a not-yet-converged Sentinel quorum at boot doesn't hard-fail.
+	if err := q.EnsureGroupWithRetry(ctx, 60*time.Second); err != nil {
 		slog.Error("ensure group", "err", err)
 		os.Exit(1)
 	}

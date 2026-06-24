@@ -65,6 +65,32 @@ func (q *Queue) EnsureGroup(ctx context.Context) error {
 	return err
 }
 
+// EnsureGroupWithRetry calls EnsureGroup with bounded ~1s retries so a daemon can
+// start before the Sentinel quorum has converged on a master. In Sentinel/failover
+// mode the master may be briefly unresolvable at boot (the wait-redis init only gates
+// on a reachable sentinel, not on master discovery), which must NOT hard-fail the
+// process. Returns the last error if the timeout elapses (k8s then restarts the pod).
+func (q *Queue) EnsureGroupWithRetry(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := q.EnsureGroup(ctx)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 // Publish XADDs a delivery id with approximate MAXLEN trimming (§5 retention).
 func (q *Queue) Publish(ctx context.Context, deliveryID string) error {
 	return q.rdb.XAdd(ctx, &redis.XAddArgs{
