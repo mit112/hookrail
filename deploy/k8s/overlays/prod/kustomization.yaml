@@ -93,22 +93,26 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 128Mi
-  - target:
-      kind: StatefulSet
-      name: postgres
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/cpu
-        value: 200m
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: 256Mi
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: "2"
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 2Gi
+  # CNPG cluster: prod-size resources + storage (strategic merge on the Cluster CR).
+  # NOTE (attended): prod must also provision the `hookrail-db` and
+  # `hookrail-db-owner` Secrets out-of-band (sealed-secrets / external store) — no
+  # real secret is committed here; the ephemeral dev-secret is dev-only.
+  - patch: |-
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: hookrail-pg
+        namespace: hookrail
+      spec:
+        storage:
+          size: 10Gi
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 2Gi
   - target:
       kind: StatefulSet
       name: redis
@@ -125,14 +129,7 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 512Mi
-  # --- Prod PVC sizes ---
-  - target:
-      kind: StatefulSet
-      name: postgres
-    patch: |-
-      - op: replace
-        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
-        value: 10Gi
+  # --- Prod PVC sizes (postgres storage handled by the CNPG Cluster patch above) ---
   - target:
       kind: StatefulSet
       name: redis
