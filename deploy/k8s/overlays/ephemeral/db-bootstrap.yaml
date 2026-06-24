@@ -33,9 +33,12 @@ spec:
               # connection: migrate completing does not guarantee the server is
               # already accepting TCP (initdb restart window / netpol propagation),
               # which previously surfaced as a one-shot "connection refused".
+              # psql variable interpolation (:'pw' -> safely single-quoted) works
+              # only on stdin/-f input, NOT in a -c string, so feed the SQL via
+              # stdin. This keeps the password injection-safe (Codex MAJOR #6).
               for i in $(seq 1 60); do
-                if psql "$MIGRATOR_DSN" -v ON_ERROR_STOP=1 -v pw="$APP_PW" \
-                     -c "ALTER ROLE hookrail_app LOGIN PASSWORD :'pw'"; then
+                if printf "ALTER ROLE hookrail_app LOGIN PASSWORD :'pw';\n" \
+                     | psql "$MIGRATOR_DSN" -v ON_ERROR_STOP=1 -v pw="$APP_PW"; then
                   echo "hookrail_app password set"; exit 0
                 fi
                 echo "postgres not ready, retry $i/60"; sleep 2
