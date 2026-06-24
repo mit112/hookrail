@@ -23,7 +23,14 @@ type Msg struct {
 	DeliveryID string
 }
 
-// New accepts either a "redis://host:port" URL or a bare "host:port".
+// NewWithClient wraps an already-constructed redis client (plain or sentinel-failover,
+// e.g. from internal/redisclient). Preferred in the daemons so Sentinel mode flows in.
+func NewWithClient(rdb *redis.Client, stream, group string) *Queue {
+	return &Queue{rdb: rdb, stream: stream, group: group, MaxLen: 100_000}
+}
+
+// New accepts either a "redis://host:port" URL or a bare "host:port" (plain mode only).
+// Retained for compose/integration/chaos tests that don't exercise Sentinel.
 func New(addr, stream, group string) (*Queue, error) {
 	var opts *redis.Options
 	if strings.HasPrefix(addr, "redis://") {
@@ -35,10 +42,17 @@ func New(addr, stream, group string) (*Queue, error) {
 	} else {
 		opts = &redis.Options{Addr: addr}
 	}
-	return &Queue{rdb: redis.NewClient(opts), stream: stream, group: group, MaxLen: 100_000}, nil
+	return NewWithClient(redis.NewClient(opts), stream, group), nil
 }
 
 func (q *Queue) Close() { _ = q.rdb.Close() }
+
+// IsNoGroup reports whether err is a Redis NOGROUP error (the consumer group is
+// missing — e.g. on a freshly-promoted Sentinel master that never replicated the
+// XGROUP CREATE). Callers re-run EnsureGroup and retry rather than wedging. (Codex MAJOR-3.)
+func IsNoGroup(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "NOGROUP")
+}
 
 func (q *Queue) Ping(ctx context.Context) error { return q.rdb.Ping(ctx).Err() }
 
