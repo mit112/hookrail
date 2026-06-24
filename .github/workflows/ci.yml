@@ -141,3 +141,20 @@ jobs:
         run: command -v k3d kubectl docker go
       - name: CNPG Postgres-failover chaos (kill primary; RPO=0 + liveness + dup bound)
         run: bash scripts/pg-failover-e2e.sh
+  redis-failover:
+    if: github.ref == 'refs/heads/main'
+    needs: [lint, test]
+    runs-on: ubuntu-latest # docker + k3d → redis Sentinel topology; host go test drives the oracle
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: Install k3d
+        run: curl -sSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.9.0 bash
+      - uses: azure/setup-kubectl@v4
+        with: { version: "v1.33.1" }
+      - name: Preflight (fail early if a tool is missing)
+        run: command -v k3d kubectl docker go
+      - name: Redis Sentinel-failover chaos (kill master; different-ordinal promotion + RPO=0 + NOGROUP recovery)
+        run: bash scripts/redis-failover-e2e.sh

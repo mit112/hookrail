@@ -287,7 +287,11 @@ func adminPost(t *testing.T, adminURL, tok, path, body string) string {
 
 // pollRecovered drains to terminal and asserts: nothing non-terminal/dead/cancelled,
 // succeeded in [expectedMin, expectedMax], receiver-distinct == DB succeeded (exact),
-// duplicates <= dupBound. Adapted from test/chaos/harness_test.go PollRecoveredBounded.
+// and duplicates <= dupBound. A NEGATIVE dupBound disables the duplicate ceiling
+// entirely (duplicates become a logged-only diagnostic) — used by the Redis-failover
+// oracle, where async Sentinel replication admits no tight, mechanism-derived dup
+// bound (spec §6.3 / Codex M3 MINOR-4). The PG-failover oracle passes a positive,
+// mechanism-derived bound and is unaffected. Adapted from harness_test.go.
 func pollRecovered(recvURL string, expectedMin, expectedMax, dupBound int, deadline time.Duration) (struct {
 	DB    DBState
 	Stats Stats
@@ -304,14 +308,15 @@ func pollRecovered(recvURL string, expectedMin, expectedMax, dupBound int, deadl
 		db, e2 := fetchDB()
 		if e1 == nil && e2 == nil {
 			last = result{DB: db, Stats: st}
+			dupOK := dupBound < 0 || st.Duplicates <= dupBound
 			if db.NonTerminal() == 0 && db.DeadLettered == 0 && db.Cancelled == 0 &&
 				db.Succeeded >= expectedMin && db.Succeeded <= expectedMax &&
-				st.Distinct == db.Succeeded && st.Duplicates <= dupBound {
+				st.Distinct == db.Succeeded && dupOK {
 				return last, nil
 			}
 		}
 		time.Sleep(time.Second)
 	}
-	return last, fmt.Errorf("not recovered within %s: nonTerminal=%d succeeded=%d want[%d,%d] distinct=%d dups=%d (bound %d) deadletter=%d cancelled=%d",
+	return last, fmt.Errorf("not recovered within %s: nonTerminal=%d succeeded=%d want[%d,%d] distinct=%d dups=%d (bound %d; <0=unbounded) deadletter=%d cancelled=%d",
 		deadline, last.DB.NonTerminal(), last.DB.Succeeded, expectedMin, expectedMax, last.Stats.Distinct, last.Stats.Duplicates, dupBound, last.DB.DeadLettered, last.DB.Cancelled)
 }
