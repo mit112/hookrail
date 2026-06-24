@@ -18,7 +18,8 @@ type fakeNoGroupQueue struct {
 	mu          sync.Mutex
 	ensureCalls int
 	readCalls   int
-	cancelAfter int
+	cancelAfter int   // >0: cancel inside EnsureGroup after this many calls (success path)
+	ensureErr   error // set: EnsureGroup fails (backoff path); test drives cancel
 	cancel      context.CancelFunc
 }
 
@@ -32,9 +33,12 @@ func (f *fakeNoGroupQueue) Read(ctx context.Context, _ string, _ int, _ time.Dur
 func (f *fakeNoGroupQueue) EnsureGroup(ctx context.Context) error {
 	f.mu.Lock()
 	f.ensureCalls++
-	stop := f.ensureCalls >= f.cancelAfter
+	n := f.ensureCalls
 	f.mu.Unlock()
-	if stop {
+	if f.ensureErr != nil {
+		return f.ensureErr
+	}
+	if f.cancelAfter > 0 && n >= f.cancelAfter {
 		f.cancel()
 	}
 	return nil
@@ -68,5 +72,33 @@ func TestRun_NoGroupRecovery_ReEnsuresAndHonorsCtx(t *testing.T) {
 	}
 	if fq.readCalls < 3 {
 		t.Fatalf("Read calls=%d want >=3 (loop retried after each re-ensure)", fq.readCalls)
+	}
+}
+
+// TestRun_NoGroupRecovery_BacksOffWhenEnsureFails proves the MAJOR fix: when the
+// re-EnsureGroup itself fails (master still settling), the loop must NOT hot-spin
+// XREADGROUP->NOGROUP->failed-CREATE; it falls through to the bounded ~1s backoff.
+// Within a 200ms pre-cancel window only one ensure attempt can occur — a hot-spin
+// would register thousands.
+func TestRun_NoGroupRecovery_BacksOffWhenEnsureFails(t *testing.T) {
+	intakeCtx, cancel := context.WithCancel(context.Background())
+	fq := &fakeNoGroupQueue{ensureErr: errors.New("connection refused"), cancel: cancel}
+	w := &Worker{Queue: fq, Consumer: "c", Lease: time.Second}
+
+	done := make(chan error, 1)
+	go func() { done <- w.Run(intakeCtx, context.Background()) }()
+
+	time.Sleep(200 * time.Millisecond) // shorter than the 1s backoff
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not exit")
+	}
+
+	fq.mu.Lock()
+	defer fq.mu.Unlock()
+	if fq.ensureCalls != 1 {
+		t.Fatalf("ensureCalls=%d want 1 within 200ms (proves bounded backoff on ensure failure, not hot-spin)", fq.ensureCalls)
 	}
 }
