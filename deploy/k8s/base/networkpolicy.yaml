@@ -27,18 +27,34 @@ spec:
       ports:
         - port: 8082
 ---
+# CNPG ingress (design spec §5, Codex MAJOR #5). The Cluster pods carry the
+# label cnpg.io/cluster: hookrail-pg and live in the default-deny-ingress ns, so
+# they need explicit edges for: operator->instance (5432 conn + 8000 instance
+# manager), instance<->instance (streaming replication on 5432), and app/job->-rw.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-apps-to-postgres
+  name: allow-to-postgres-cnpg
   namespace: hookrail
 spec:
   podSelector:
     matchLabels:
-      app: postgres
+      cnpg.io/cluster: hookrail-pg
   policyTypes:
     - Ingress
   ingress:
+    # operator (cnpg-system) + peer instances: 5432 (sql/replication) + 8000 (instance manager)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: hookrail-pg
+      ports:
+        - port: 5432
+        - port: 8000
+    # application + migrate/bootstrap pods: SQL only
     - from:
         - podSelector:
             matchLabels:

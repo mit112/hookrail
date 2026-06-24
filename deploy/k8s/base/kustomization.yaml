@@ -3,7 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - configmap.yaml
-  - postgres.yaml
+  - pg-cluster.yaml
   - redis.yaml
   - migrate-job.yaml
   - api.yaml

@@ -2,7 +2,7 @@
 # Ephemeral-only: the dashboard-keygen + db-bootstrap Jobs are overlay resources
 # (deploy/k8s/overlays/ephemeral). They need Postgres ingress, but kept OUT of the
 # base policy so the prod path never carries allow rules for harness-only
-# identities. NetworkPolicies are additive — this unions with allow-apps-to-postgres.
+# identities. NetworkPolicies are additive — this unions with allow-to-postgres-cnpg.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -11,7 +11,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: postgres
+      cnpg.io/cluster: hookrail-pg
   policyTypes:
     - Ingress
   ingress:

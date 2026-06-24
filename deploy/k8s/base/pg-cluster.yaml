@@ -1,0 +1,38 @@
+---
+# Postgres HA via CloudNativePG (design spec §3.2). Replaces the single-replica
+# Postgres StatefulSet. The operator auto-creates the Services:
+#   hookrail-pg-rw  -> current primary (read-write)   <- app/migrator/bootstrap use this
+#   hookrail-pg-ro  -> replicas (read-only)            <- unused (single DSN, no read routing)
+#   hookrail-pg-r   -> any instance
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: hookrail-pg
+  namespace: hookrail
+spec:
+  instances: 3 # 1 primary + 2 standby
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.10 # PG 16, matches migrations; pin per deploy/k8s/cnpg/README.md
+  # primaryUpdateStrategy governs ROLLING-UPDATE ordering only (NOT failover).
+  # Failover is automated by the operator and gated by synchronous.failoverQuorum.
+  primaryUpdateStrategy: unsupervised
+  postgresql:
+    synchronous:
+      method: any # quorum-based synchronous replication
+      number: 1 # ack once ANY 1 standby has the commit -> zero RPO, tolerant of one standby loss
+      dataDurability: required # block writes rather than silently drop to async if quorum unmet
+      failoverQuorum: true # only promote a standby proven to hold committed WAL (no stale promotion)
+  bootstrap:
+    initdb:
+      database: hookrail
+      owner: hookrail # the migrator role; password from the owner secret below
+      secret:
+        name: hookrail-db-owner # basic-auth secret (username: hookrail), created per-overlay
+  storage:
+    size: 1Gi # ephemeral default; prod overlay patches up
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
