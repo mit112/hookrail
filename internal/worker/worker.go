@@ -49,6 +49,15 @@ func (w *Worker) Run(intakeCtx, workCtx context.Context) error {
 	for intakeCtx.Err() == nil {
 		msgs, err := w.Queue.Read(intakeCtx, w.Consumer, 16, 2*time.Second)
 		if err != nil && intakeCtx.Err() == nil {
+			if queue.IsNoGroup(err) {
+				// Promoted Sentinel master is missing the consumer group (XGROUP
+				// CREATE never replicated); recreate it (idempotent) and retry
+				// rather than wedging consumption forever (Codex MAJOR-3).
+				if gerr := w.Queue.EnsureGroup(intakeCtx); gerr != nil {
+					slog.Warn("ensure group after NOGROUP", "err", gerr)
+				}
+				continue
+			}
 			slog.Warn("queue read", "err", err)
 			time.Sleep(time.Second)
 			continue
