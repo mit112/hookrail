@@ -1,9 +1,13 @@
 ---
 # Sentinel-aware role-selection entrypoint for the redis StatefulSet (design spec
-# §3.2, BLOCKER-2). The brittle "no master => redis-0" rule is avoided: a restarted
-# pod always rejoins the CURRENT master and never re-seizes mastership after a real
-# failover. Order: (1) ask the Sentinel quorum; (2) else probe peers' ROLE directly;
-# (3) genesis (ordinal 0 only) when no master is known anywhere.
+# §3.2, BLOCKER-2). A restarted pod always rejoins the CURRENT master and never
+# re-seizes mastership after a real failover. Codex M2 gate folds:
+#  - role decision requires a Sentinel QUORUM (>=2/3 agreeing) before it is trusted,
+#    then a live-peer ROLE probe — never a single (possibly stale) sentinel's answer;
+#  - the redis-0 "genesis master" branch fires ONLY on a provably-fresh PVC (no
+#    bootstrap marker). On any subsequent restart the pod BLOCKS until it resolves the
+#    current master, rather than self-promoting or blindly following redis-0 (which
+#    could demote the true master to a replica of its own replica).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,43 +19,96 @@ data:
     set -eu
     SENTINELS="redis-sentinel-0.redis-sentinel redis-sentinel-1.redis-sentinel redis-sentinel-2.redis-sentinel"
     POD_FQDN="${HOSTNAME}.redis-headless.hookrail.svc.cluster.local"
-    MASTER=""
-    # 1. Ask the Sentinel quorum for the current master (authoritative post-failover).
-    for s in $SENTINELS; do
-      A=$(redis-cli -h "$s" -p 26379 sentinel get-master-addr-by-name hookrail 2>/dev/null | head -n1 || true)
-      case "$A" in
-        ""|"(nil)"|ERR*|NOGOODSLAVE*|NOMASTER*) : ;;
-        *) MASTER="$A"; break ;;
-      esac
-    done
-    # 2. Else probe each peer's ROLE directly (covers a Sentinel cold start where the
-    #    quorum has not yet discovered the master). A fresh redis-server is master
-    #    until told otherwise, so the genesis seed self-reports master immediately.
-    if [ -z "$MASTER" ]; then
+    MARKER=/data/.hookrail-bootstrapped
+
+    # quorum_master: print the master FQDN agreed by >=2 sentinels, else nothing.
+    # Guards against one stale/restarting sentinel re-promoting an old master.
+    quorum_master() {
+      answers=""
+      for s in $SENTINELS; do
+        A=$(redis-cli -h "$s" -p 26379 sentinel get-master-addr-by-name hookrail 2>/dev/null | head -n1 || true)
+        case "$A" in
+          ""|"(nil)"|ERR*|NOGOODSLAVE*|NOMASTER*) : ;;
+          *) answers="$answers $A" ;;
+        esac
+      done
+      best=""; bestn=0
+      for cand in $answers; do
+        c=0
+        for x in $answers; do [ "$x" = "$cand" ] && c=$((c + 1)); done
+        if [ "$c" -gt "$bestn" ]; then bestn=$c; best=$cand; fi
+      done
+      [ "$bestn" -ge 2 ] && echo "$best"
+    }
+
+    # peer_master: print a peer (not me) that self-reports `master`, else nothing.
+    peer_master() {
       for p in redis-0 redis-1; do
         [ "$p" = "$HOSTNAME" ] && continue
         R=$(redis-cli -h "$p.redis-headless" -p 6379 role 2>/dev/null | head -n1 || true)
         if [ "$R" = "master" ]; then
-          MASTER="$p.redis-headless.hookrail.svc.cluster.local"
-          break
+          echo "$p.redis-headless.hookrail.svc.cluster.local"
+          return
         fi
       done
+    }
+
+    # decide_master: quorum first (authoritative), then a live-peer probe.
+    decide_master() {
+      M=$(quorum_master); [ -n "$M" ] && { echo "$M"; return; }
+      peer_master
+    }
+
+    MASTER=""
+    if [ ! -f "$MARKER" ]; then
+      # First boot ever (fresh PVC) -> genesis bootstrap.
+      MASTER=$(decide_master || true)
+      if [ -z "$MASTER" ]; then
+        # No master anywhere on a fresh cluster: ordinal 0 seeds; others follow it.
+        if [ "${HOSTNAME##*-}" != "0" ]; then
+          MASTER="redis-0.redis-headless.hookrail.svc.cluster.local"
+        fi
+      fi
+      touch "$MARKER"
+    else
+      # Restart of an already-bootstrapped node: NEVER guess. Block until the current
+      # master resolves from the quorum or a live peer. If decide_master returns MY
+      # OWN FQDN, the quorum still considers me master -> start as master.
+      i=0
+      while :; do
+        MASTER=$(decide_master || true)
+        [ -n "$MASTER" ] && break
+        i=$((i + 1))
+        [ "$i" -ge 60 ] && { echo "redis: cannot resolve current master after restart; still retrying" >&2; i=0; }
+        sleep 2
+      done
+      # Settle guard: if the quorum names ME as master on a restart, a failover
+      # triggered by my own (just-ended) outage may still be resolving — re-read a few
+      # times so a freshly-rescheduled OLD master does not race back to mastership
+      # before Sentinel promotes the surviving replica. Bounded so a genuine in-place
+      # master restart (no competing promotion) only pays a few seconds.
+      if [ "$MASTER" = "$POD_FQDN" ]; then
+        j=0
+        while [ "$j" -lt 4 ]; do
+          sleep 2
+          M2=$(decide_master || true)
+          if [ -n "$M2" ] && [ "$M2" != "$POD_FQDN" ]; then MASTER="$M2"; break; fi
+          j=$((j + 1))
+        done
+      fi
     fi
+
     {
       echo "appendonly yes"
       echo "replica-announce-ip ${POD_FQDN}"
-      # Shrink the async-replication loss window (BLOCKER-1): a master refuses writes
-      # unless >=1 replica is within 10s of lag. Does NOT make Redis the RPO source of
-      # truth (PG+sweeper is) — it bounds, not eliminates, the un-replicated window.
-      echo "min-replicas-to-write 1"
-      echo "min-replicas-max-lag 10"
       if [ -n "$MASTER" ] && [ "$MASTER" != "$POD_FQDN" ]; then
-        # A live master exists and it is not me -> follow it (post-failover rejoin too).
         echo "replicaof ${MASTER} 6379"
-      elif [ -z "$MASTER" ] && [ "${HOSTNAME##*-}" != "0" ]; then
-        # No master known anywhere AND I am not ordinal 0 -> follow the genesis seed.
-        echo "replicaof redis-0.redis-headless.hookrail.svc.cluster.local 6379"
       fi
-      # else: (MASTER resolves to me) OR (no master & I am redis-0) -> start as master.
+      # else: MASTER empty (genesis ordinal-0) OR MASTER==me (quorum says I am master)
+      # -> start as master (no replicaof). NOTE: min-replicas-to-write is intentionally
+      # NOT set — on a 1-master+1-replica set it would make a freshly-promoted master
+      # reject ALL writes (NOREPLICAS) until the killed pod rejoins, defeating HA write
+      # availability. Application RPO=0 is a Postgres+sweeper property, not a Redis one
+      # (Codex M2 BLOCKER-2).
     } > /tmp/redis.conf
     exec redis-server /tmp/redis.conf

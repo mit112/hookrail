@@ -15,6 +15,8 @@ data:
     sentinel resolve-hostnames yes
     sentinel announce-hostnames yes
     sentinel monitor hookrail redis-0.redis-headless.hookrail.svc.cluster.local 6379 2
-    sentinel down-after-milliseconds hookrail 5000
-    sentinel failover-timeout hookrail 10000
+    # Detection tuned so Sentinel reliably promotes the surviving replica before a
+    # force-deleted master pod can reschedule and re-seize mastership (RTO ~3-9s).
+    sentinel down-after-milliseconds hookrail 3000
+    sentinel failover-timeout hookrail 6000
     sentinel parallel-syncs hookrail 1
