@@ -1,0 +1,20 @@
+---
+# Seed sentinel.conf (design spec §3.2). Copied ONCE into each Sentinel's PVC by an
+# initContainer; thereafter Sentinel OWNS the file and rewrites failover/epoch state
+# in place (BLOCKER-2 — an ephemeral conf makes a restarted Sentinel forget the
+# current master and risk re-promoting a stale redis-0). resolve-hostnames +
+# announce-hostnames keep discovery stable across pod-IP churn (Redis 7).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-sentinel-config
+  namespace: hookrail
+data:
+  sentinel.conf: |
+    port 26379
+    sentinel resolve-hostnames yes
+    sentinel announce-hostnames yes
+    sentinel monitor hookrail redis-0.redis-headless.hookrail.svc.cluster.local 6379 2
+    sentinel down-after-milliseconds hookrail 5000
+    sentinel failover-timeout hookrail 10000
+    sentinel parallel-syncs hookrail 1

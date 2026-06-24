@@ -1,0 +1,95 @@
+---
+# 3-node Sentinel quorum (design spec §3.2). Headless Service for per-pod DNS so
+# go-redis FailoverClient can list each sentinel explicitly. Each pod persists its
+# sentinel.conf on a PVC (BLOCKER-2).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel
+  namespace: hookrail
+  labels:
+    app: redis-sentinel
+spec:
+  clusterIP: None
+  selector:
+    app: redis-sentinel
+  ports:
+    - port: 26379
+      targetPort: 26379
+  publishNotReadyAddresses: true
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-sentinel
+  namespace: hookrail
+spec:
+  serviceName: redis-sentinel
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis-sentinel
+  template:
+    metadata:
+      labels:
+        app: redis-sentinel
+    spec:
+      initContainers:
+        # Seed the persisted conf ONLY if absent; Sentinel rewrites it in place after.
+        # Append a per-pod announce-ip (hostname form; resolve-hostnames is on) so the
+        # quorum advertises stable DNS rather than churning pod IPs.
+        - name: seed-conf
+          image: redis:7-alpine
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              CONF=/data/sentinel.conf
+              if [ ! -f "$CONF" ]; then
+                cp /seed/sentinel.conf "$CONF"
+                echo "sentinel announce-ip ${HOSTNAME}.redis-sentinel.hookrail.svc.cluster.local" >> "$CONF"
+                echo "sentinel announce-port 26379" >> "$CONF"
+              fi
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: seed
+              mountPath: /seed
+      containers:
+        - name: sentinel
+          image: redis:7-alpine
+          command: ["redis-sentinel", "/data/sentinel.conf"]
+          ports:
+            - containerPort: 26379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "-p", "26379", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: seed
+          configMap:
+            name: redis-sentinel-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 64Mi
