@@ -43,11 +43,13 @@ spec:
                 secretKeyRef:
                   name: hookrail-db
                   key: migrator_dsn
-            - name: REDIS_ADDR
+            # keygen runs hookrail-ctl (config.Load requires Redis configured) but never
+            # dials Redis; a Sentinel addr satisfies config without connecting.
+            - name: REDIS_SENTINEL_ADDRS
               valueFrom:
                 configMapKeyRef:
                   name: hookrail-config
-                  key: REDIS_ADDR
+                  key: REDIS_SENTINEL_ADDRS
             - name: HOOKRAIL_MASTER_KEY
               valueFrom:
                 secretKeyRef:

@@ -23,7 +23,9 @@ spec:
           command: ["kubectl", "wait", "--for=condition=complete", "--timeout=120s", "job/migrate"]
         - name: wait-redis
           image: busybox:1.36
-          command: ["sh", "-c", "until nc -z redis 6379; do sleep 1; done"]
+          # Sentinel mode: gate on a reachable Sentinel (the app's FailoverClient then
+          # discovers the master). The old fixed `redis` ClusterIP no longer exists.
+          command: ["sh", "-c", "until nc -z redis-sentinel 26379; do sleep 1; done"]
       containers:
         - name: worker
           image: hookrail

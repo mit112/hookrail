@@ -4,7 +4,10 @@ metadata:
   name: hookrail-config
   namespace: hookrail
 data:
-  REDIS_ADDR: "redis:6379"
+  # Sentinel/failover mode: clients discover the current master via the quorum.
+  # REDIS_ADDR is intentionally absent (Sentinel wins; plain mode is compose/dev/CI only).
+  REDIS_SENTINEL_ADDRS: "redis-sentinel-0.redis-sentinel:26379,redis-sentinel-1.redis-sentinel:26379,redis-sentinel-2.redis-sentinel:26379"
+  REDIS_MASTER_NAME: "hookrail"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
   HOOKRAIL_ADMIN_URL: "http://admin:8082"
   HOOKRAIL_INGRESS_URL: "http://api:8080"

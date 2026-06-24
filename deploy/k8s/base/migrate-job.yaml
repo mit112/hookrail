@@ -31,11 +31,13 @@ spec:
                 secretKeyRef:
                   name: hookrail-db
                   key: migrator_dsn
-            - name: REDIS_ADDR
+            # config.Load() requires Redis to be configured; the migrate command never
+            # dials Redis (lazy client), so a Sentinel addr satisfies it without connecting.
+            - name: REDIS_SENTINEL_ADDRS
               valueFrom:
                 configMapKeyRef:
                   name: hookrail-config
-                  key: REDIS_ADDR
+                  key: REDIS_SENTINEL_ADDRS
             - name: HOOKRAIL_MASTER_KEY
               valueFrom:
                 secretKeyRef:

@@ -4,7 +4,10 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - pg-cluster.yaml
+  - redis-entrypoint-configmap.yaml
   - redis.yaml
+  - redis-sentinel-configmap.yaml
+  - redis-sentinel.yaml
   - migrate-job.yaml
   - api.yaml
   - worker.yaml

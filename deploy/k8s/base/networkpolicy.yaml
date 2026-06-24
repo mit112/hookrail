@@ -85,6 +85,9 @@ spec:
       ports:
         - port: 5432
 ---
+# Redis HA (Sentinel topology, design spec §3.2): apps connect directly to the
+# current master pod:6379 (discovered via Sentinel); redis<->redis carries
+# replication; sentinels monitor redis:6379. All on the default-deny-ingress ns.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -113,8 +116,54 @@ spec:
         - podSelector:
             matchLabels:
               app: dashboard
+        # peer redis (streaming replication) + sentinels (monitoring/role probes)
+        - podSelector:
+            matchLabels:
+              app: redis
+        - podSelector:
+            matchLabels:
+              app: redis-sentinel
       ports:
         - port: 6379
+---
+# Sentinel quorum: apps query it (FailoverClient master discovery), redis pods'
+# role-selection entrypoint probes it, and sentinels gossip/vote among themselves.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-redis-sentinel
+  namespace: hookrail
+spec:
+  podSelector:
+    matchLabels:
+      app: redis-sentinel
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api
+        - podSelector:
+            matchLabels:
+              app: worker
+        - podSelector:
+            matchLabels:
+              app: scheduler
+        - podSelector:
+            matchLabels:
+              app: admin
+        - podSelector:
+            matchLabels:
+              app: dashboard
+        - podSelector:
+            matchLabels:
+              app: redis
+        - podSelector:
+            matchLabels:
+              app: redis-sentinel
+      ports:
+        - port: 26379
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
