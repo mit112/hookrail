@@ -124,3 +124,20 @@ jobs:
         env:
           HOOKRAIL_MASTER_KEY: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         run: go test -tags chaos ./test/chaos -v -count=1 -timeout 40m -run 'TestExperimentWorkerCrash|TestExperimentPostgresOutage|TestExperimentRedisQueueLoss|TestExperimentOrderedNoReorder|TestExperimentLeaderFailover|TestChaos_E_RL_LimiterFailOpenAndRecover'
+  pg-failover:
+    if: github.ref == 'refs/heads/main'
+    needs: [lint, test]
+    runs-on: ubuntu-latest # docker + k3d → CNPG cluster; host go test drives the oracle
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: Install k3d
+        run: curl -sSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.9.0 bash
+      - uses: azure/setup-kubectl@v4
+        with: { version: "v1.33.1" }
+      - name: Preflight (fail early if a tool is missing)
+        run: command -v k3d kubectl docker go
+      - name: CNPG Postgres-failover chaos (kill primary; RPO=0 + liveness + dup bound)
+        run: bash scripts/pg-failover-e2e.sh
