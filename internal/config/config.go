@@ -50,6 +50,10 @@ type Config struct {
 	// rate-limit overrides and republishes the global snapshot. Default 15s;
 	// lowered in integration tests so a freshly-seeded override propagates fast.
 	LimitsRefreshInterval time.Duration // HOOKRAIL_LIMITS_REFRESH_INTERVAL, default 15s
+	// DBConnectTimeout bounds the startup DB open+ping retry so a pod started
+	// during a CNPG primary-failover window waits for the promoted primary
+	// instead of crashlooping. Default 30s.
+	DBConnectTimeout time.Duration // HOOKRAIL_DB_CONNECT_TIMEOUT
 }
 
 func Load() (Config, error) {
@@ -169,6 +173,15 @@ func Load() (Config, error) {
 			perr = fmt.Errorf("HOOKRAIL_DRAIN_RETRY_JITTER_MAX must be a positive Go duration (got %q)", v)
 		} else {
 			c.DrainRetryJitterMax = d
+		}
+	}
+	c.DBConnectTimeout = 30 * time.Second
+	if v := os.Getenv("HOOKRAIL_DB_CONNECT_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			perr = fmt.Errorf("HOOKRAIL_DB_CONNECT_TIMEOUT must be a positive Go duration (got %q)", v)
+		} else {
+			c.DBConnectTimeout = d
 		}
 	}
 	// Global rate limiting (P2): defaults on when Redis is configured.

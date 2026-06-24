@@ -71,6 +71,31 @@ func TestLimitsRefreshIntervalOverride(t *testing.T) {
 	}
 }
 
+func TestDBConnectTimeout_DefaultAndOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DBConnectTimeout != 30*time.Second {
+		t.Fatalf("default DBConnectTimeout = %v, want 30s", c.DBConnectTimeout)
+	}
+	t.Setenv("HOOKRAIL_DB_CONNECT_TIMEOUT", "5s")
+	c, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DBConnectTimeout != 5*time.Second {
+		t.Fatalf("override DBConnectTimeout = %v, want 5s", c.DBConnectTimeout)
+	}
+	t.Setenv("HOOKRAIL_DB_CONNECT_TIMEOUT", "nonsense")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error on invalid HOOKRAIL_DB_CONNECT_TIMEOUT")
+	}
+}
+
 func TestLimitsRefreshIntervalRejectsBad(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x/y")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
