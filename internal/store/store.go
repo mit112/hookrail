@@ -39,6 +39,43 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{Pool: pool, dsn: dsn}, nil
 }
 
+// OpenWithRetry opens the store, retrying Open (pool create + ping) on transient
+// failures until success or maxWait elapses. A pod (re)started during a CNPG
+// primary-failover window thus waits for the promoted primary instead of exiting.
+// maxWait <= 0 is a single attempt (fail-fast, preserves Open semantics).
+func OpenWithRetry(ctx context.Context, dsn string, maxWait time.Duration) (*Store, error) {
+	return openWithRetry(ctx, maxWait, 250*time.Millisecond, func(c context.Context) (*Store, error) {
+		return Open(c, dsn)
+	})
+}
+
+func openWithRetry(ctx context.Context, maxWait, initialBackoff time.Duration, attempt func(context.Context) (*Store, error)) (*Store, error) {
+	deadline := time.Now().Add(maxWait)
+	const maxBackoff = 3 * time.Second
+	backoff := initialBackoff
+	var lastErr error
+	for {
+		s, err := attempt(ctx)
+		if err == nil {
+			return s, nil
+		}
+		lastErr = err
+		if maxWait <= 0 || !time.Now().Add(backoff).Before(deadline) {
+			return nil, fmt.Errorf("store: open did not succeed within %s: %w", maxWait, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("store: open cancelled: %w", ctx.Err())
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			if backoff *= 2; backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+}
+
 func (s *Store) Close() { s.Pool.Close() }
 
 // ErrNotFound: admin lookups/updates that match no live row (handler → 404).
