@@ -123,8 +123,10 @@ func failoverQuorumHealthy(t *testing.T) bool {
 	}
 	method, _ := kubectlTry("-n", ns, "get", "failoverquorum.postgresql.cnpg.io", name,
 		"-o", "jsonpath={.status.method}")
-	if strings.TrimSpace(method) != "any" {
-		t.Logf("FailoverQuorum %s status.method=%q, want any", name, method)
+	// CNPG reports the quorum method as the uppercase PG keyword "ANY"; the spec
+	// field is lowercase "any". Compare case-insensitively.
+	if !strings.EqualFold(strings.TrimSpace(method), "any") {
+		t.Logf("FailoverQuorum %s status.method=%q, want any/ANY", name, method)
 		return false
 	}
 	return true
