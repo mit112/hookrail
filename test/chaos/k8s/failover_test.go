@@ -190,12 +190,16 @@ func mustEnv(t *testing.T, k string) string {
 }
 
 func primaryPodTry() (name, uid string) {
-	name, _ = kubectlTry("-n", ns, "get", "pod",
+	// range-form jsonpath returns "" (not an error) when no primary exists during
+	// the promotion window — a bare {.items[0]...} errors "array index out of bounds"
+	// and that error text must NOT be mistaken for a pod name.
+	out, err := kubectlTry("-n", ns, "get", "pod",
 		"-l", "cnpg.io/cluster=hookrail-pg,cnpg.io/instanceRole=primary",
-		"-o", "jsonpath={.items[0].metadata.name}")
-	if name == "" {
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{end}")
+	if err != nil || out == "" {
 		return "", ""
 	}
+	name = out
 	uid, _ = kubectlTry("-n", ns, "get", "pod", name, "-o", "jsonpath={.metadata.uid}")
 	return name, uid
 }
