@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"strconv"
@@ -14,6 +15,13 @@ import (
 type Config struct {
 	DatabaseURL string   // DATABASE_URL
 	RedisAddr   string   // REDIS_ADDR (host:port or redis:// URL)
+
+	// Redis HA (P2). When REDIS_SENTINEL_ADDRS is set the queue + rate-limiter
+	// clients run in Sentinel/failover mode and REDIS_ADDR is optional/ignored.
+	RedisSentinelAddrs []string // REDIS_SENTINEL_ADDRS (comma-separated host:port)
+	RedisMasterName    string   // REDIS_MASTER_NAME, default "hookrail"
+	RedisConfigured    bool     // derived: RedisAddr != "" || len(RedisSentinelAddrs) > 0
+
 	Stream      string   // HOOKRAIL_STREAM, default "hookrail:deliveries"
 	Group       string   // HOOKRAIL_GROUP, default "deliverers"
 	ListenAddr  string   // HOOKRAIL_LISTEN, default ":8080"
@@ -65,8 +73,17 @@ func Load() (Config, error) {
 		ListenAddr:  envOr("HOOKRAIL_LISTEN", ":8080"),
 		AllowHTTP:   os.Getenv("HOOKRAIL_ALLOW_HTTP") == "true",
 	}
-	if c.DatabaseURL == "" || c.RedisAddr == "" {
-		return c, fmt.Errorf("DATABASE_URL and REDIS_ADDR are required")
+	if v := os.Getenv("REDIS_SENTINEL_ADDRS"); v != "" {
+		for _, a := range strings.Split(v, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				c.RedisSentinelAddrs = append(c.RedisSentinelAddrs, a)
+			}
+		}
+	}
+	c.RedisMasterName = envOr("REDIS_MASTER_NAME", "hookrail")
+	c.RedisConfigured = c.RedisAddr != "" || len(c.RedisSentinelAddrs) > 0
+	if c.DatabaseURL == "" || !c.RedisConfigured {
+		return c, fmt.Errorf("DATABASE_URL and (REDIS_ADDR or REDIS_SENTINEL_ADDRS) are required")
 	}
 	mk := os.Getenv("HOOKRAIL_MASTER_KEY")
 	raw, err := hex.DecodeString(mk)
@@ -184,8 +201,8 @@ func Load() (Config, error) {
 			c.DBConnectTimeout = d
 		}
 	}
-	// Global rate limiting (P2): defaults on when Redis is configured.
-	c.GlobalRateLimit = c.RedisAddr != ""
+	// Global rate limiting (P2): defaults on when Redis is configured (plain or sentinel).
+	c.GlobalRateLimit = c.RedisConfigured
 	if v := os.Getenv("HOOKRAIL_GLOBAL_RATELIMIT"); v != "" {
 		c.GlobalRateLimit = v != "0" && v != "false"
 	}
@@ -207,9 +224,18 @@ func Load() (Config, error) {
 			c.RLTTLFloor = time.Duration(n) * time.Second
 		}
 	}
-	c.RLRedisAddr = c.RedisAddr
-	if v := os.Getenv("HOOKRAIL_RL_REDIS_ADDR"); v != "" {
-		c.RLRedisAddr = v
+	// HOOKRAIL_RL_REDIS_ADDR is plain-mode-only (its sole use is the E_RL toxiproxy
+	// compose chaos). In Sentinel mode the limiter client uses Sentinel; ignore + warn.
+	if len(c.RedisSentinelAddrs) > 0 {
+		c.RLRedisAddr = ""
+		if os.Getenv("HOOKRAIL_RL_REDIS_ADDR") != "" {
+			slog.Warn("HOOKRAIL_RL_REDIS_ADDR ignored in sentinel mode")
+		}
+	} else {
+		c.RLRedisAddr = c.RedisAddr
+		if v := os.Getenv("HOOKRAIL_RL_REDIS_ADDR"); v != "" {
+			c.RLRedisAddr = v
+		}
 	}
 	c.LimitsRefreshInterval = 15 * time.Second
 	if v := os.Getenv("HOOKRAIL_LIMITS_REFRESH_INTERVAL"); v != "" {

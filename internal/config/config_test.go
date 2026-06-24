@@ -166,3 +166,47 @@ func TestRLRedisAddrOverride(t *testing.T) {
 		t.Fatalf("RLRedisAddr = %q, want toxiproxy:8479", cfg.RLRedisAddr)
 	}
 }
+
+func TestLoad_SentinelMode_NoRedisAddr(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("REDIS_ADDR", "")
+	t.Setenv("REDIS_SENTINEL_ADDRS", "s1:26379,s2:26379,s3:26379")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.RedisConfigured {
+		t.Fatal("RedisConfigured should be true in sentinel mode")
+	}
+	if len(c.RedisSentinelAddrs) != 3 || c.RedisMasterName != "hookrail" {
+		t.Fatalf("sentinel addrs=%v master=%q", c.RedisSentinelAddrs, c.RedisMasterName)
+	}
+	if !c.GlobalRateLimit {
+		t.Fatal("GlobalRateLimit should default on when RedisConfigured")
+	}
+}
+
+func TestLoad_NoRedisAtAll_Errors(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("REDIS_ADDR", "")
+	t.Setenv("REDIS_SENTINEL_ADDRS", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error when neither REDIS_ADDR nor REDIS_SENTINEL_ADDRS set")
+	}
+}
+
+func TestLoad_RLRedisAddr_IgnoredInSentinelMode(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("REDIS_SENTINEL_ADDRS", "s1:26379")
+	t.Setenv("HOOKRAIL_RL_REDIS_ADDR", "toxi:6379")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.RLRedisAddr != "" {
+		t.Fatalf("RLRedisAddr should be empty/ignored in sentinel mode, got %q", c.RLRedisAddr)
+	}
+}
