@@ -210,3 +210,23 @@ func TestLoad_RLRedisAddr_IgnoredInSentinelMode(t *testing.T) {
 		t.Fatalf("RLRedisAddr should be empty/ignored in sentinel mode, got %q", c.RLRedisAddr)
 	}
 }
+
+func TestLoad_BothSet_SentinelWins(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("HOOKRAIL_MASTER_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	t.Setenv("REDIS_ADDR", "plain:6379")
+	t.Setenv("REDIS_SENTINEL_ADDRS", "s1:26379,s2:26379")
+	t.Setenv("HOOKRAIL_RL_REDIS_ADDR", "toxi:6379")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.RedisConfigured || len(c.RedisSentinelAddrs) != 2 {
+		t.Fatalf("sentinel should be active: configured=%v addrs=%v", c.RedisConfigured, c.RedisSentinelAddrs)
+	}
+	// Sentinel mode wins: the plain-mode RL override must be ignored even though
+	// REDIS_ADDR is also set.
+	if c.RLRedisAddr != "" {
+		t.Fatalf("RLRedisAddr=%q want empty (sentinel wins, plain RL override ignored)", c.RLRedisAddr)
+	}
+}

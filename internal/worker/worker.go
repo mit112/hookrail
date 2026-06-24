@@ -27,10 +27,21 @@ import (
 	"github.com/mit112/hookrail/internal/store"
 )
 
+// DispatchQueue is the subset of *queue.Queue the dispatch loop uses. It is an
+// interface so the NOGROUP-recovery path is unit-testable with a fake; *queue.Queue
+// satisfies it, so production wiring is unchanged.
+type DispatchQueue interface {
+	Read(ctx context.Context, consumer string, count int, block time.Duration) ([]queue.Msg, error)
+	Autoclaim(ctx context.Context, consumer string, minIdle time.Duration, count int) ([]queue.Msg, error)
+	Ack(ctx context.Context, msgID string) error
+	EnsureGroup(ctx context.Context) error
+	Publish(ctx context.Context, deliveryID string) error
+}
+
 type Worker struct {
 	Store     *store.Store
-	Queue     *queue.Queue // nil in unit-style tests that call Process directly
-	Client    *http.Client // ssrf.NewHTTPClient(Policy)
+	Queue     DispatchQueue // nil in unit-style tests that call Process directly
+	Client    *http.Client  // ssrf.NewHTTPClient(Policy)
 	Policy    ssrf.Policy
 	Backoff   backoff.Policy
 	Limits    *ratelimit.Registry      // per endpoint id
@@ -51,14 +62,18 @@ func (w *Worker) Run(intakeCtx, workCtx context.Context) error {
 		if err != nil && intakeCtx.Err() == nil {
 			if queue.IsNoGroup(err) {
 				// Promoted Sentinel master is missing the consumer group (XGROUP
-				// CREATE never replicated); recreate it (idempotent) and retry
-				// rather than wedging consumption forever (Codex MAJOR-3).
-				if gerr := w.Queue.EnsureGroup(intakeCtx); gerr != nil {
+				// CREATE never replicated); recreate it (idempotent). Only fast-retry
+				// on a SUCCESSFUL re-ensure — otherwise fall through to the same
+				// bounded backoff as any other read error so we never hot-spin
+				// XREADGROUP->NOGROUP->failed-CREATE during a failover (Codex MAJOR-3).
+				if gerr := w.Queue.EnsureGroup(intakeCtx); gerr == nil {
+					continue
+				} else {
 					slog.Warn("ensure group after NOGROUP", "err", gerr)
 				}
-				continue
+			} else {
+				slog.Warn("queue read", "err", err)
 			}
-			slog.Warn("queue read", "err", err)
 			time.Sleep(time.Second)
 			continue
 		}

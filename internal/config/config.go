@@ -13,8 +13,8 @@ import (
 )
 
 type Config struct {
-	DatabaseURL string   // DATABASE_URL
-	RedisAddr   string   // REDIS_ADDR (host:port or redis:// URL)
+	DatabaseURL string // DATABASE_URL
+	RedisAddr   string // REDIS_ADDR (host:port or redis:// URL)
 
 	// Redis HA (P2). When REDIS_SENTINEL_ADDRS is set the queue + rate-limiter
 	// clients run in Sentinel/failover mode and REDIS_ADDR is optional/ignored.
@@ -22,12 +22,12 @@ type Config struct {
 	RedisMasterName    string   // REDIS_MASTER_NAME, default "hookrail"
 	RedisConfigured    bool     // derived: RedisAddr != "" || len(RedisSentinelAddrs) > 0
 
-	Stream      string   // HOOKRAIL_STREAM, default "hookrail:deliveries"
-	Group       string   // HOOKRAIL_GROUP, default "deliverers"
-	ListenAddr  string   // HOOKRAIL_LISTEN, default ":8080"
-	MasterKey   [32]byte // HOOKRAIL_MASTER_KEY: 64 hex chars (§4 secrets)
-	AllowHTTP   bool     // HOOKRAIL_ALLOW_HTTP=true (dev only, §8)
-	AllowCIDRs  []string // HOOKRAIL_ALLOW_CIDRS: comma-separated allowlist (§8)
+	Stream     string   // HOOKRAIL_STREAM, default "hookrail:deliveries"
+	Group      string   // HOOKRAIL_GROUP, default "deliverers"
+	ListenAddr string   // HOOKRAIL_LISTEN, default ":8080"
+	MasterKey  [32]byte // HOOKRAIL_MASTER_KEY: 64 hex chars (§4 secrets)
+	AllowHTTP  bool     // HOOKRAIL_ALLOW_HTTP=true (dev only, §8)
+	AllowCIDRs []string // HOOKRAIL_ALLOW_CIDRS: comma-separated allowlist (§8)
 
 	AdminToken            string        // HOOKRAIL_ADMIN_TOKEN (admin binary refuses boot if empty)
 	AdminListen           string        // HOOKRAIL_ADMIN_LISTEN, default ":8082"
