@@ -43,7 +43,7 @@ func main() {
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
-	s, err := store.Open(ctx, cfg.DatabaseURL)
+	s, err := store.OpenWithRetry(ctx, cfg.DatabaseURL, cfg.DBConnectTimeout)
 	if err != nil {
 		slog.Error("store", "err", err)
 		os.Exit(1)
