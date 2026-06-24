@@ -37,7 +37,9 @@ func kubectlOut(t *testing.T, args ...string) string {
 }
 
 func kubectlTry(args ...string) (string, error) {
-	out, err := exec.Command("kubectl", args...).CombinedOutput()
+	// stdout only: kubectl writes warnings (e.g. "v1 Endpoints is deprecated")
+	// to stderr, which must NOT pollute parsed jsonpath/psql values.
+	out, err := exec.Command("kubectl", args...).Output()
 	return strings.TrimSpace(string(out)), err
 }
 
