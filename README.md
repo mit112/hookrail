@@ -211,6 +211,14 @@ three experiments on `main`. Validate the dashboards with `make dash-verify`. Th
 curated Grafana boards (`overview`, `resilience`) provision automatically with
 `make up` at <http://localhost:3000>.
 
+Two further **datastore-failover** experiments run against a live k3d cluster (their
+own main-only CI jobs; `scripts/pg-failover-e2e.sh`, `scripts/redis-failover-e2e.sh`):
+
+| Experiment | Fault | Guarantee |
+|---|---|---|
+| Postgres failover | force-delete the CNPG primary under load | a standby is promoted (new primary, `-rw` flips, old pod rejoins) with zero RPO for accepted events |
+| Redis failover | force-delete the Redis master under load | Sentinel promotes a **different-ordinal** replica; every accepted delivery still converges to `succeeded` (RPO=0 via PG+sweeper), and a destroyed consumer group recovers in place |
+
 ## High Availability (app tier)
 
 The relay app tier (api, worker, scheduler, admin, dashboard) runs at N ≥ 2
@@ -237,11 +245,14 @@ replicas for zero-downtime deploys and single-replica failure tolerance.
   global path is **cap-relaxing under failure**: a limiter-command error falls
   back to the per-replica bucket (fail-open) and Redis state loss reconstructs
   full buckets — both may briefly admit above the cap, never throttle below it.
-- **Datastore remains single-instance; tunnel cutover stays attended.** Postgres
-  and Redis each run at `replicas: 1` — data-tier HA is out of scope for this
-  release. The Cloudflare Tunnel (`cloudflared`) is bumped to 2 replicas in the
-  prod overlay, but the live cutover remains an attended procedure. Multi-node k3s
-  and datastore HA are deferred to a future slice.
+- **Datastore HA (Postgres + Redis); multi-node + tunnel cutover stay attended.**
+  Postgres runs as a CloudNativePG 3-instance synchronous-quorum cluster (zero RPO
+  for accepted events) and Redis runs as a master+replica StatefulSet behind a
+  3-node Sentinel quorum with automatic promotion. The Cloudflare Tunnel
+  (`cloudflared`) is bumped to 2 replicas in the prod overlay, but the live cutover
+  remains an attended procedure. On a single k3s node every HA tier is process-level
+  failover only — **multi-node k3s** (node/disk-loss tolerance) is the remaining
+  deferred slice.
 
 Operational notes (PgBouncer incompatibility, drain timeout, rate-limit
 disclosure): see [docs/deploy/k3s.md](docs/deploy/k3s.md).

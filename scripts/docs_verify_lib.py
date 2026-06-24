@@ -123,21 +123,23 @@ for f, text in docs_text.items():
             if tgt not in make_targets:
                 err(f, i, f"cites 'make {tgt}' but no such Makefile target")
 
-# ports: every cited port (localhost:P, bare :P, host:P URL) must appear somewhere in the compose
-# stack files (published OR container/internal — e.g. scheduler:8083 is internal-only). Lenient on
-# WHICH side, strict that a wholly-bogus port (e.g. :9999) fails. Folds Codex "port-check too narrow".
-compose_blob = ""
-for cf in glob.glob(os.path.join(ROOT, "deploy/compose/*.yml")):
-    with open(cf, encoding="utf-8") as fh:
-        compose_blob += fh.read() + "\n"
-valid_ports = set(re.findall(r'\b(\d{2,5})\b', compose_blob))
+# ports: every cited port (localhost:P, bare :P, host:P URL) must appear somewhere in the deploy
+# stack files (compose published/internal, OR the k8s manifests — e.g. the Sentinel :26379 is a
+# k8s-only port, never in compose). Lenient on WHICH side, strict that a wholly-bogus port (e.g.
+# :9999) fails. Folds Codex "port-check too narrow".
+deploy_blob = ""
+for pat in ("deploy/compose/*.yml", "deploy/k8s/**/*.yaml"):
+    for cf in glob.glob(os.path.join(ROOT, pat), recursive=True):
+        with open(cf, encoding="utf-8") as fh:
+            deploy_blob += fh.read() + "\n"
+valid_ports = set(re.findall(r'\b(\d{2,5})\b', deploy_blob))
 CITE_RE = re.compile(r'(?:localhost|[a-z][a-z0-9.-]*):(\d{2,5})\b|(?<![\d.]):(\d{2,5})\b')
 for f, text in docs_text.items():
     for i, line in enumerate(text.splitlines(), 1):
         for m in CITE_RE.finditer(line):
             port = m.group(1) or m.group(2)
             if port and port not in valid_ports:
-                err(f, i, f"cites port :{port} but no such port in deploy/compose/*.yml")
+                err(f, i, f"cites port :{port} but no such port in deploy/compose or deploy/k8s")
 
 # key paths exist
 for p in ("deploy/k8s/overlays/prod", "docs/baseline", "clients/python"):

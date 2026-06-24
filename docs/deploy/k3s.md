@@ -45,6 +45,43 @@ kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=2
 > node/disk loss until a second physical node is added — the manifests are
 > correct for multi-node, but live fault-tolerance is bounded by the single node.
 
+## 1c. Redis HA (Sentinel)
+
+Redis runs as a **master + replica StatefulSet** (`redis-0`, `redis-1`) fronted by a
+**3-node Sentinel quorum** (`redis-sentinel-0..2`), replacing the former single-node
+Redis SPOF. On a master-pod loss, Sentinel automatically promotes the surviving
+replica (RTO ~3–9s); the app's Redis clients are go-redis `FailoverClient`s that
+discover the current master through the quorum, so no app restart is needed. These
+ship in the base overlay — no extra install step beyond the overlay apply.
+
+Configuration is driven by two ConfigMap keys (already set in
+`deploy/k8s/base/configmap.yaml`); app pods run in Sentinel mode and `REDIS_ADDR` is
+absent:
+
+```yaml
+REDIS_SENTINEL_ADDRS: "redis-sentinel-0.redis-sentinel:26379,redis-sentinel-1.redis-sentinel:26379,redis-sentinel-2.redis-sentinel:26379"
+REDIS_MASTER_NAME: "hookrail"
+```
+
+Each redis pod runs a Sentinel-aware **role-selection entrypoint**: it asks the
+Sentinel quorum (≥2/3 agreement) for the current master, falls back to a live-peer
+`ROLE` probe, and only seeds `redis-0` as the genesis master on a **provably-fresh
+PVC**. A restarted pod always rejoins the *current* master and never re-seizes
+mastership after a real failover. Sentinels persist their `sentinel.conf` on a PVC so
+a restarted Sentinel does not forget the current master.
+
+> **Durability honesty (RPO):** application **RPO=0 is a Postgres + sweeper property,
+> not a Redis property.** Redis carries `delivery_id` only; the stream is a hot-path
+> hint. Sentinel replication is asynchronous, so a promotion may drop recently-written
+> stream/consumer-group state — that loss is re-driven from Postgres by the sweeper
+> (at-least-once), never a lost delivery. We therefore do **not** set
+> `min-replicas-to-write` (it would make a freshly-promoted master reject writes until
+> the killed pod rejoins, defeating availability for no durability gain).
+>
+> **Single-node honesty:** as with Postgres, on one k3s node this is process-level
+> failover only; node/disk-loss HA needs a second physical node. The live Mac-mini
+> cutover is always **attended** — never run by CI.
+
 ## 2. Create Secrets (attended — never committed)
 
 Generate a 64-hex-char master key:
@@ -230,10 +267,11 @@ curl -s --connect-timeout 5 http://<k3s-node-ip>:8082/healthz || echo "blocked (
   3-instance synchronous-quorum cluster with automated failover** (zero RPO for
   accepted events). On a *single* k3s node this is **process-level** failover
   only — surviving a Postgres pod/process loss + promotion — but **not node/disk
-  loss**, since all three CNPG instances and the app pods share the one node. Redis,
-  OTel, Prometheus, and Jaeger each still run as a single pod. **Redis HA**
-  (Sentinel) and **multi-node k3s** are deferred to future slices; add a second
-  node before claiming hardware-failure tolerance.
+  loss**, since all three CNPG instances and the app pods share the one node.
+  **Redis now runs HA too** — a master+replica StatefulSet behind a 3-node Sentinel
+  quorum with automatic promotion (§1c). OTel, Prometheus, and Jaeger each still run
+  as a single pod. **Multi-node k3s** is deferred; add a second node before claiming
+  hardware-failure tolerance (every HA tier above is process-level on one node).
 - **Cloudflare Tunnel dependency.** Public access depends on the Cloudflare edge
   and the `cloudflared` Deployment (the tunnel runs as its own standalone
   Deployment, not a sidecar). A Cloudflare outage or tunnel disruption makes
