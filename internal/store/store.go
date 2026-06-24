@@ -50,23 +50,46 @@ func OpenWithRetry(ctx context.Context, dsn string, maxWait time.Duration) (*Sto
 }
 
 func openWithRetry(ctx context.Context, maxWait, initialBackoff time.Duration, attempt func(context.Context) (*Store, error)) (*Store, error) {
+	if initialBackoff <= 0 {
+		initialBackoff = 250 * time.Millisecond // guard against a busy-spin
+	}
+	// maxWait <= 0: single attempt, fail-fast (preserves Open semantics).
+	if maxWait <= 0 {
+		s, err := attempt(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("store: open did not succeed within %s: %w", maxWait, err)
+		}
+		return s, nil
+	}
+	// Hard overall bound: attempts run under a deadline context so a hanging
+	// pool-create/Ping cannot block past maxWait (Codex M1 BLOCKER).
+	dctx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
 	deadline := time.Now().Add(maxWait)
 	const maxBackoff = 3 * time.Second
 	backoff := initialBackoff
 	var lastErr error
 	for {
-		s, err := attempt(ctx)
+		s, err := attempt(dctx)
 		if err == nil {
 			return s, nil
 		}
 		lastErr = err
-		if maxWait <= 0 || !time.Now().Add(backoff).Before(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return nil, fmt.Errorf("store: open did not succeed within %s: %w", maxWait, lastErr)
 		}
+		sleep := backoff
+		if sleep > remaining {
+			sleep = remaining // never sleep past the deadline
+		}
 		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("store: open cancelled: %w", ctx.Err())
-		case <-time.After(backoff):
+		case <-dctx.Done():
+			if ctx.Err() != nil { // parent cancelled (not our timeout)
+				return nil, fmt.Errorf("store: open cancelled: %w", ctx.Err())
+			}
+			return nil, fmt.Errorf("store: open did not succeed within %s: %w", maxWait, lastErr)
+		case <-time.After(sleep):
 		}
 		if backoff < maxBackoff {
 			if backoff *= 2; backoff > maxBackoff {

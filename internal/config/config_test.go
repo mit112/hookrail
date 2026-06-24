@@ -90,9 +90,11 @@ func TestDBConnectTimeout_DefaultAndOverride(t *testing.T) {
 	if c.DBConnectTimeout != 5*time.Second {
 		t.Fatalf("override DBConnectTimeout = %v, want 5s", c.DBConnectTimeout)
 	}
-	t.Setenv("HOOKRAIL_DB_CONNECT_TIMEOUT", "nonsense")
-	if _, err := Load(); err == nil {
-		t.Fatal("expected error on invalid HOOKRAIL_DB_CONNECT_TIMEOUT")
+	for _, bad := range []string{"nonsense", "0", "-1s"} {
+		t.Setenv("HOOKRAIL_DB_CONNECT_TIMEOUT", bad)
+		if _, err := Load(); err == nil {
+			t.Fatalf("expected error on HOOKRAIL_DB_CONNECT_TIMEOUT=%q", bad)
+		}
 	}
 }
 
