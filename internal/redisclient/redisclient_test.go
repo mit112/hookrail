@@ -10,7 +10,7 @@ func TestNew_PlainMode_BareAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if got := c.Options().Addr; got != "localhost:6379" {
 		t.Fatalf("addr=%q want localhost:6379", got)
 	}
@@ -21,7 +21,7 @@ func TestNew_PlainMode_URL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if c.Options().DB != 2 {
 		t.Fatalf("db=%d want 2", c.Options().DB)
 	}
@@ -36,7 +36,7 @@ func TestNew_SentinelMode_WinsOverAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if c.Options().Addr == "ignored:6379" {
 		t.Fatal("sentinel-mode client must not use the plain Addr")
 	}
@@ -54,7 +54,7 @@ func TestNew_AppliesTimeouts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if c.Options().PoolSize != 8 || c.Options().ReadTimeout != 200*time.Millisecond {
 		t.Fatalf("opts not applied: pool=%d read=%s", c.Options().PoolSize, c.Options().ReadTimeout)
 	}

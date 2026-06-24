@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/mit112/hookrail/internal/obs"
 	"github.com/mit112/hookrail/internal/queue"
 	"github.com/mit112/hookrail/internal/ratelimit"
+	"github.com/mit112/hookrail/internal/redisclient"
 	"github.com/mit112/hookrail/internal/ssrf"
 	"github.com/mit112/hookrail/internal/store"
 	"github.com/mit112/hookrail/internal/worker"
@@ -50,11 +50,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.Close()
-	q, err := queue.New(cfg.RedisAddr, cfg.Stream, cfg.Group)
+	rdb, err := redisclient.New(redisclient.Options{
+		Addr:          cfg.RedisAddr,
+		SentinelAddrs: cfg.RedisSentinelAddrs,
+		MasterName:    cfg.RedisMasterName,
+	})
 	if err != nil {
-		slog.Error("queue", "err", err)
+		slog.Error("redis", "err", err)
 		os.Exit(1)
 	}
+	q := queue.NewWithClient(rdb, cfg.Stream, cfg.Group)
 	defer q.Close()
 	q.MaxLen = cfg.StreamMaxLen
 	if err := q.EnsureGroup(intakeCtx); err != nil {
@@ -67,21 +72,21 @@ func main() {
 	// head-of-line-block limiter EVAL calls.
 	var rlClient *redis.Client
 	if cfg.GlobalRateLimit {
-		var rlOpts *redis.Options
-		if strings.HasPrefix(cfg.RLRedisAddr, "redis://") {
-			var err error
-			rlOpts, err = redis.ParseURL(cfg.RLRedisAddr)
-			if err != nil {
-				slog.Error("limiter redis parse", "err", err)
-				os.Exit(1)
-			}
-		} else {
-			rlOpts = &redis.Options{Addr: cfg.RLRedisAddr}
+		// Plain mode: RLRedisAddr carries the addr/toxiproxy override. Sentinel mode:
+		// RLRedisAddr is "" and SentinelAddrs wins (a separate FailoverClient so a
+		// blocking XREADGROUP never head-of-line-blocks limiter EVALs).
+		rlClient, err = redisclient.New(redisclient.Options{
+			Addr:          cfg.RLRedisAddr,
+			SentinelAddrs: cfg.RedisSentinelAddrs,
+			MasterName:    cfg.RedisMasterName,
+			PoolSize:      8,
+			ReadTimeout:   200 * time.Millisecond,
+			WriteTimeout:  200 * time.Millisecond,
+		})
+		if err != nil {
+			slog.Error("limiter redis", "err", err)
+			os.Exit(1)
 		}
-		rlOpts.PoolSize = 8
-		rlOpts.ReadTimeout = 200 * time.Millisecond
-		rlOpts.WriteTimeout = 200 * time.Millisecond
-		rlClient = redis.NewClient(rlOpts)
 		defer func() { _ = rlClient.Close() }()
 	}
 

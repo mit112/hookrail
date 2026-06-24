@@ -9,7 +9,7 @@ import (
 
 func TestNewWithClient_UsesProvidedClient(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "x:6379"})
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	q := NewWithClient(rdb, "s", "g")
 	if q == nil || q.stream != "s" || q.group != "g" {
 		t.Fatal("NewWithClient did not wire fields")

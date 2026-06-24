@@ -15,6 +15,7 @@ import (
 	"github.com/mit112/hookrail/internal/obs"
 	"github.com/mit112/hookrail/internal/queue"
 	"github.com/mit112/hookrail/internal/ratelimit"
+	"github.com/mit112/hookrail/internal/redisclient"
 	"github.com/mit112/hookrail/internal/ssrf"
 	"github.com/mit112/hookrail/internal/store"
 )
@@ -49,11 +50,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.Close()
-	q, err := queue.New(cfg.RedisAddr, cfg.Stream, cfg.Group)
+	rdb, err := redisclient.New(redisclient.Options{
+		Addr:          cfg.RedisAddr,
+		SentinelAddrs: cfg.RedisSentinelAddrs,
+		MasterName:    cfg.RedisMasterName,
+	})
 	if err != nil {
-		slog.Error("queue", "err", err)
+		slog.Error("redis", "err", err)
 		os.Exit(1)
 	}
+	q := queue.NewWithClient(rdb, cfg.Stream, cfg.Group)
 	defer q.Close()
 	q.MaxLen = cfg.StreamMaxLen
 
