@@ -83,13 +83,16 @@ data:
         sleep 2
       done
       # Settle guard: if the quorum names ME as master on a restart, a failover
-      # triggered by my own (just-ended) outage may still be resolving — re-read a few
-      # times so a freshly-rescheduled OLD master does not race back to mastership
-      # before Sentinel promotes the surviving replica. Bounded so a genuine in-place
-      # master restart (no competing promotion) only pays a few seconds.
+      # triggered by my own (just-ended) outage may still be resolving — re-read so a
+      # freshly-rescheduled OLD master does not race back to mastership before Sentinel
+      # promotes the surviving replica. The window MUST exceed Sentinel's worst-case
+      # promotion time = down-after-milliseconds (3s) + failover-timeout (6s) = ~9s, so
+      # 8x2s=16s gives margin (Codex M3 MAJOR-1). Exits early the instant a different
+      # master appears, so a real failover is not slowed; only a genuine in-place master
+      # restart with no competing promotion pays the full window.
       if [ "$MASTER" = "$POD_FQDN" ]; then
         j=0
-        while [ "$j" -lt 4 ]; do
+        while [ "$j" -lt 8 ]; do
           sleep 2
           M2=$(decide_master || true)
           if [ -n "$M2" ] && [ "$M2" != "$POD_FQDN" ]; then MASTER="$M2"; break; fi
