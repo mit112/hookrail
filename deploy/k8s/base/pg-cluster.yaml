@@ -32,6 +32,13 @@ spec:
       # hookrail_app`, which needs CREATEROLE. Grant it once at bootstrap (runs
       # as superuser). Role attributes are cluster-global, so postInitSQL is the
       # right hook.
+      #
+      # DELIBERATE (Codex MAJOR #5): CREATEROLE is left PERSISTENT, not revoked
+      # after bootstrap. It is required at every deploy by the db-bootstrap Job /
+      # runbook step that runs `ALTER ROLE hookrail_app LOGIN PASSWORD ...` (the
+      # owner needs CREATEROLE+ADMIN to alter the app role it created). This is a
+      # NET PRIVILEGE REDUCTION vs the prior topology, where `hookrail` was a full
+      # SUPERUSER; CREATEROLE in PG16 cannot escalate beyond the role's own grants.
       postInitSQL:
         - ALTER ROLE "hookrail" CREATEROLE
   storage:

@@ -32,8 +32,8 @@ func TestExperimentPGFailover(t *testing.T) {
 	if ri := readyInstances(t); ri != 3 {
 		t.Fatalf("precondition: readyInstances=%d, want 3 (1 primary + 2 standby)", ri)
 	}
-	if !failoverQuorumActive(t) {
-		t.Fatal("precondition: FailoverQuorum resource absent — quorum safety gate inactive, proof would be vacuous")
+	if !failoverQuorumHealthy(t) {
+		t.Fatal("precondition: FailoverQuorum absent or not reporting ANY-quorum sync — safety gate inactive, proof would be vacuous")
 	}
 
 	// --- host-access channels (spec §6 MAJOR #7) ---
@@ -64,7 +64,8 @@ func TestExperimentPGFailover(t *testing.T) {
 	waitAccepted(t, load, phasePre, acceptFloor, 60*time.Second)
 
 	oldName, oldUID := primaryPod(t)
-	preRestarts := podRestartCounts(t, "app in (api,worker,scheduler)")
+	const appSel = "app in (api,worker,scheduler,admin)" // all DB-owning daemons (Codex MAJOR #4)
+	preRestarts := podRestartCounts(t, appSel)
 	dbAtKill, _ := fetchDB()
 	inFlightAtKill := dbAtKill.InFlight
 
@@ -111,6 +112,10 @@ func TestExperimentPGFailover(t *testing.T) {
 	}
 	if !rwFlipped {
 		t.Fatalf("fact1: -rw endpoint never flipped to new primary %s (got %q)", newName, rwEndpointPodTry())
+	}
+	// no split-brain: exactly one pod claims the primary role (Codex MINOR #7)
+	if np := countPrimaries(t); np != 1 {
+		t.Fatalf("fact1: %d primaries after failover, want exactly 1 (split-brain)", np)
 	}
 
 	// --- bucket C: post-promotion load must also succeed (liveness, not just old durable) ---
@@ -164,17 +169,52 @@ func TestExperimentPGFailover(t *testing.T) {
 	dupBound := inFlightAtKill + totalAccepted/10 + 10
 	snap, err := pollRecovered(recvURL, totalAccepted, totalAttempts, dupBound, 150*time.Second)
 	if err != nil {
-		t.Fatalf("fact2/4: %v", err)
+		t.Fatalf("fact2/4 (aggregate drain): %v", err)
 	}
-	t.Logf("reconciled: succeeded=%d distinct=%d dups=%d accepted=%d attempts=%d dupBound=%d",
+	t.Logf("reconciled(aggregate): succeeded=%d distinct=%d dups=%d accepted=%d attempts=%d dupBound=%d",
 		snap.DB.Succeeded, snap.Stats.Distinct, snap.Stats.Duplicates, totalAccepted, totalAttempts, dupBound)
 
-	// Fact 4b: no app CRASHLOOP across the failover (ties to M1 startup-retry). A
-	// single restart that recovers via OpenWithRetry is the feature working; a
-	// crashloop is repeated restarts, so allow at most +1 per pod.
-	postRestarts := podRestartCounts(t, "app in (api,worker,scheduler)")
+	// Fact 2 (RPO=0, IDENTITY-level — Codex BLOCKER): every accepted delivery_id
+	// must exist as a row AND be 'succeeded'. A lost accept makes found<len; a
+	// count-only check could mask it with a timed-out-but-committed delivery.
+	acceptedIDs := load.acceptedIDsAll()
+	if len(acceptedIDs) != totalAccepted {
+		t.Fatalf("fact2: tracked accepted ids=%d != counted accepted=%d", len(acceptedIDs), totalAccepted)
+	}
+	succ, found, err := succeededAmong(acceptedIDs)
+	if err != nil {
+		t.Fatalf("fact2: per-id reconcile: %v", err)
+	}
+	if found != len(acceptedIDs) {
+		t.Fatalf("fact2: DATA LOSS — only %d of %d accepted deliveries exist as rows after failover", found, len(acceptedIDs))
+	}
+	if succ != len(acceptedIDs) {
+		t.Fatalf("fact2: only %d of %d accepted deliveries reached 'succeeded'", succ, len(acceptedIDs))
+	}
+	// Fact 2 (identity, receiver side — Codex MAJOR #2): each accepted delivery_id
+	// was actually received (>=1 2xx) end-to-end, not just marked succeeded.
+	missing := 0
+	for _, id := range acceptedIDs {
+		if n, e := receivedCount(recvURL, id); e != nil || n < 1 {
+			missing++
+		}
+	}
+	if missing != 0 {
+		t.Fatalf("fact2: %d of %d accepted deliveries not confirmed received by the endpoint", missing, len(acceptedIDs))
+	}
+	t.Logf("reconciled(per-id): all %d accepted deliveries succeeded + received", len(acceptedIDs))
+
+	// Fact 4b: no app CRASHLOOP and no pod REPLACEMENT across the failover (ties to
+	// M1 startup-retry). A single in-place restart that recovers via OpenWithRetry
+	// is the feature working; a crashloop is repeated restarts; a vanished pod name
+	// means it was killed/rescheduled (not expected for a PG failover) — Codex MAJOR #4.
+	postRestarts := podRestartCounts(t, appSel)
 	for pod, pre := range preRestarts {
-		if post, ok := postRestarts[pod]; ok && post > pre+1 {
+		post, ok := postRestarts[pod]
+		if !ok {
+			t.Fatalf("fact4: app pod %s vanished during failover (replaced, not restarted-in-place)", pod)
+		}
+		if post > pre+1 {
 			t.Fatalf("fact4: pod %s crashlooped during failover (%d->%d) — startup not failover-resilient", pod, pre, post)
 		}
 	}

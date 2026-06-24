@@ -110,12 +110,24 @@ func readyInstances(t *testing.T) int {
 	return v
 }
 
-// failoverQuorumActive asserts the FailoverQuorum safety gate is present — a
-// failover proof on a cluster without it would be vacuous (spec §6.1 precond).
-func failoverQuorumActive(t *testing.T) bool {
+// failoverQuorumHealthy asserts the FailoverQuorum safety gate is present AND
+// reports the intended quorum-sync config (status.method == "any") — existence
+// alone is too weak (Codex MAJOR #3); a failover proof on a cluster whose quorum
+// isn't actually the configured ANY-1 sync would be vacuous.
+func failoverQuorumHealthy(t *testing.T) bool {
 	t.Helper()
-	out, err := kubectlTry("-n", ns, "get", "failoverquorum.postgresql.cnpg.io", "-o", "name")
-	return err == nil && strings.TrimSpace(out) != ""
+	name, err := kubectlTry("-n", ns, "get", "failoverquorum.postgresql.cnpg.io",
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{end}")
+	if err != nil || strings.TrimSpace(name) == "" {
+		return false
+	}
+	method, _ := kubectlTry("-n", ns, "get", "failoverquorum.postgresql.cnpg.io", name,
+		"-o", "jsonpath={.status.method}")
+	if strings.TrimSpace(method) != "any" {
+		t.Logf("FailoverQuorum %s status.method=%q, want any", name, method)
+		return false
+	}
+	return true
 }
 
 // portForward starts `kubectl port-forward` to a Service and returns a stop func.
@@ -152,6 +164,8 @@ type Load struct {
 	Topic  string
 	ph     int32
 	b      [3]bucket
+	mu     sync.Mutex
+	ids    [3][]string // accepted delivery_ids per phase (for per-ID RPO reconciliation)
 }
 
 type ingestResp struct {
@@ -180,7 +194,23 @@ func (l *Load) post(ctx context.Context) {
 	var out ingestResp
 	if json.NewDecoder(resp.Body).Decode(&out) == nil && len(out.DeliveryIDs) > 0 {
 		atomic.AddInt64(&b.accepted, int64(len(out.DeliveryIDs)))
+		p := atomic.LoadInt32(&l.ph)
+		l.mu.Lock()
+		l.ids[p] = append(l.ids[p], out.DeliveryIDs...)
+		l.mu.Unlock()
 	}
+}
+
+// acceptedIDsAll returns every accepted (202-acked) delivery_id across all phases —
+// the exact set that must survive the failover (per-ID RPO=0 reconciliation).
+func (l *Load) acceptedIDsAll() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var all []string
+	for i := range l.ids {
+		all = append(all, l.ids[i]...)
+	}
+	return all
 }
 
 // start launches the saturator at ~rate/s; returns a stop func.
@@ -272,6 +302,85 @@ func fetchDB() (DBState, error) {
 		}
 	}
 	return d, nil
+}
+
+func livePrimary() (string, error) {
+	p, err := kubectlTry("-n", ns, "get", "pod",
+		"-l", "cnpg.io/cluster=hookrail-pg,cnpg.io/instanceRole=primary",
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{end}")
+	if err != nil || p == "" {
+		return "", fmt.Errorf("no live primary: %v", err)
+	}
+	return p, nil
+}
+
+// succeededAmong reconciles the EXACT accepted delivery_id set against the DB
+// (Codex BLOCKER): found = how many of those ids exist as rows, succeeded = how
+// many reached 'succeeded'. A lost-on-failover accepted delivery makes found <
+// len(ids); a stuck/dead one makes succeeded < found. Count-only oracles can mask
+// a lost accept with a timed-out-but-committed one — this cannot.
+func succeededAmong(ids []string) (succeeded, found int, err error) {
+	if len(ids) == 0 {
+		return 0, 0, fmt.Errorf("no accepted ids to reconcile")
+	}
+	primary, err := livePrimary()
+	if err != nil {
+		return 0, 0, err
+	}
+	quoted := make([]string, len(ids)) // ids are server-minted ULIDs (safe charset)
+	for i, id := range ids {
+		quoted[i] = "'" + id + "'"
+	}
+	q := "SELECT count(*) FILTER (WHERE state='succeeded'),count(*) FROM deliveries WHERE id IN (" +
+		strings.Join(quoted, ",") + ")"
+	out, err := kubectlTry("-n", ns, "exec", primary, "-c", "postgres", "--",
+		"psql", "-U", "postgres", "-d", "hookrail", "-tAF,", "-c", q)
+	if err != nil {
+		return 0, 0, fmt.Errorf("psql per-id: %v (%s)", err, out)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Count(l, ",") == 1 {
+			parts := strings.Split(strings.TrimSpace(l), ",")
+			_, e1 := fmt.Sscanf(strings.TrimSpace(parts[0]), "%d", &succeeded)
+			_, e2 := fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &found)
+			if e1 != nil || e2 != nil {
+				return 0, 0, fmt.Errorf("parse per-id counts %q", l)
+			}
+			return succeeded, found, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("unexpected per-id output: %q", out)
+}
+
+// receivedCount returns how many 2xx receipts the receiver saw for a delivery_id
+// (identity-level end-to-end confirmation; Codex MAJOR #2). Uses the receiver's
+// existing GET /received?delivery_id=X endpoint.
+func receivedCount(recvURL, id string) (int, error) {
+	req, _ := http.NewRequest(http.MethodGet, recvURL+"/received?delivery_id="+id, nil)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var n int
+	_, err = fmt.Fscanf(resp.Body, "%d", &n)
+	return n, err
+}
+
+// countPrimaries returns how many CNPG pods currently claim the primary role —
+// must be exactly 1 (no split-brain) after failover (Codex MINOR #7).
+func countPrimaries(t *testing.T) int {
+	t.Helper()
+	out := kubectlOut(t, "-n", ns, "get", "pod",
+		"-l", "cnpg.io/cluster=hookrail-pg,cnpg.io/instanceRole=primary",
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	n := 0
+	for _, l := range strings.Split(out, "\n") {
+		if strings.TrimSpace(l) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func envOr(k, def string) string {

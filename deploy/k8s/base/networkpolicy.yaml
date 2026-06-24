@@ -43,17 +43,25 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # operator (cnpg-system) + peer instances: 5432 (sql/replication) + 8000 (instance manager)
+    # operator pods ONLY (cnpg-system namespace AND the cloudnative-pg pod label —
+    # combined in one peer = AND): 5432 (management) + 8000 (instance manager).
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+      ports:
+        - port: 5432
+        - port: 8000
+    # peer CNPG instances: streaming replication on 5432 only (no 8000 peer-to-peer)
+    - from:
         - podSelector:
             matchLabels:
               cnpg.io/cluster: hookrail-pg
       ports:
         - port: 5432
-        - port: 8000
     # application + migrate/bootstrap pods: SQL only
     - from:
         - podSelector:
