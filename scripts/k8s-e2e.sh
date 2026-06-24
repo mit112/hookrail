@@ -20,17 +20,40 @@ docker pull redis:7-alpine
 docker pull otel/opentelemetry-collector-contrib:0.104.0
 docker pull prom/prometheus:v2.53.0
 docker pull jaegertracing/all-in-one:1.58
+# CloudNativePG operator (vendored pin) + PG operand image (Datastore HA)
+docker pull ghcr.io/cloudnative-pg/cloudnative-pg:1.29.1
+docker pull ghcr.io/cloudnative-pg/postgresql:16.10
 k3d image import \
   rancher/kubectl:v1.33.1 busybox:1.36 postgres:16-alpine redis:7-alpine \
   otel/opentelemetry-collector-contrib:0.104.0 prom/prometheus:v2.53.0 \
   jaegertracing/all-in-one:1.58 \
+  ghcr.io/cloudnative-pg/cloudnative-pg:1.29.1 ghcr.io/cloudnative-pg/postgresql:16.10 \
   -c "$CLUSTER"
 # Wait for API server readiness
 for i in $(seq 1 30); do kubectl version --request-timeout=2s >/dev/null 2>&1 && break; sleep 2; done
 kubectl version --request-timeout=2s >/dev/null 2>&1 || { echo "API server never ready"; exit 1; }
+# Install the CNPG operator (vendored, pinned) BEFORE the overlay — the Cluster CR
+# needs the CRD to exist. Wait for the CRD Established + operator Deployment Available.
+kubectl apply --server-side -f deploy/k8s/cnpg/operator-1.29.1.yaml
+kubectl wait --for=condition=established --timeout=120s crd/clusters.postgresql.cnpg.io
+kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=240s
 kubectl apply -k deploy/k8s/overlays/ephemeral
-# Wait for postgres StatefulSet to be ready before migrate (first-time init + image pull)
-kubectl -n "$NS" wait --for=condition=ready pod -l app=postgres --timeout=300s
+# Wait for the CNPG cluster to be ready (3 instances, sync quorum healthy) before migrate.
+kubectl -n "$NS" wait --for=condition=Ready --timeout=600s cluster/hookrail-pg
+for i in $(seq 1 60); do
+  RI=$(kubectl -n "$NS" get cluster hookrail-pg -o jsonpath='{.status.readyInstances}' 2>/dev/null || echo 0)
+  [ "$RI" = "3" ] && break
+  echo "waiting for 3 ready CNPG instances (have ${RI:-0}) $i/60"; sleep 5
+done
+[ "$(kubectl -n "$NS" get cluster hookrail-pg -o jsonpath='{.status.readyInstances}')" = "3" ] || { echo "FAIL: CNPG cluster not 3/3 ready"; exit 1; }
+# failoverQuorum: true creates a FailoverQuorum resource; assert it exists (the
+# quorum safety gate the failover chaos relies on — a missing one = vacuous HA).
+for i in $(seq 1 30); do
+  kubectl -n "$NS" get failoverquorum.postgresql.cnpg.io >/dev/null 2>&1 && \
+    [ -n "$(kubectl -n "$NS" get failoverquorum.postgresql.cnpg.io -o name 2>/dev/null)" ] && break
+  echo "waiting for FailoverQuorum resource $i/30"; sleep 4
+done
+[ -n "$(kubectl -n "$NS" get failoverquorum.postgresql.cnpg.io -o name 2>/dev/null)" ] || { echo "FAIL: FailoverQuorum resource absent (quorum gate not active)"; exit 1; }
 kubectl -n "$NS" wait --for=condition=complete --timeout=300s job/migrate
 # Bootstrap hookrail_app password (0004 migration creates role NOLOGIN; set pw for app deployments)
 kubectl -n "$NS" wait --for=condition=complete --timeout=120s job/db-bootstrap
