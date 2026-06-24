@@ -25,6 +25,26 @@ cutover is deliberate. Nothing here is automated.
 kubectl create namespace hookrail
 ```
 
+## 1b. Install the CloudNativePG operator (Datastore HA)
+
+Postgres runs as a 3-instance CloudNativePG (CNPG) cluster (`Cluster/hookrail-pg`)
+with synchronous quorum replication and automated failover. The operator install
+manifest is vendored + pinned at `deploy/k8s/cnpg/operator-1.29.1.yaml` (see
+`deploy/k8s/cnpg/README.md`). Install it **before** applying the overlay — the
+`Cluster` CR needs the CRD to exist:
+
+```bash
+kubectl apply --server-side -f deploy/k8s/cnpg/operator-1.29.1.yaml
+kubectl wait --for=condition=established --timeout=120s crd/clusters.postgresql.cnpg.io
+kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=240s
+```
+
+> **Single-node honesty:** on a single Mac-mini k3s node this delivers
+> **process-level** failover (survives a Postgres pod/process loss + automated
+> standby promotion with zero RPO for accepted events). It does **not** survive
+> node/disk loss until a second physical node is added — the manifests are
+> correct for multi-node, but live fault-tolerance is bounded by the single node.
+
 ## 2. Create Secrets (attended — never committed)
 
 Generate a 64-hex-char master key:
@@ -46,9 +66,17 @@ shared password (≥16 chars each). The admin token must be ≥16 chars.
 # Postgres database secrets
 kubectl -n hookrail create secret generic hookrail-db \
   --from-literal=owner_password='<pg-owner-pw>' \
-  --from-literal=app_dsn='postgres://hookrail_app:<app-pw>@postgres:5432/hookrail?sslmode=disable' \
+  --from-literal=app_dsn='postgres://hookrail_app:<app-pw>@hookrail-pg-rw:5432/hookrail?sslmode=disable' \
   --from-literal=app_pw='<app-pw>' \
-  --from-literal=migrator_dsn='postgres://hookrail:<pg-owner-pw>@postgres:5432/hookrail?sslmode=disable'
+  --from-literal=migrator_dsn='postgres://hookrail:<pg-owner-pw>@hookrail-pg-rw:5432/hookrail?sslmode=disable'
+
+# CNPG owner credentials (basic-auth) — the operator sets the `hookrail` owner
+# role's password from this at cluster bootstrap. Username MUST be `hookrail`;
+# password MUST equal <pg-owner-pw> above so migrator_dsn authenticates.
+kubectl -n hookrail create secret generic hookrail-db-owner \
+  --type=kubernetes.io/basic-auth \
+  --from-literal=username='hookrail' \
+  --from-literal=password='<pg-owner-pw>'
 
 # Master encryption key (64 hex chars)
 kubectl -n hookrail create secret generic hookrail-app \
@@ -108,10 +136,14 @@ This is safe — the new apply will recreate it.
 kubectl apply -k deploy/k8s/overlays/prod
 ```
 
-## 7. Wait for the migrate Job
+## 7. Wait for the CNPG cluster, then the migrate Job
+
+Wait for the 3-instance cluster to be Ready (the migrate Job's init container
+also blocks on `hookrail-pg-rw`, but waiting here surfaces bootstrap problems):
 
 ```bash
-kubectl -n hookrail wait --for=condition=complete --timeout=180s job/migrate
+kubectl -n hookrail wait --for=condition=Ready --timeout=600s cluster/hookrail-pg
+kubectl -n hookrail wait --for=condition=complete --timeout=300s job/migrate
 ```
 
 ## 8. Generate the dashboard producer key
@@ -136,15 +168,23 @@ kubectl -n hookrail create secret generic hookrail-dashboard-producer-key \
 ## 9. Enable the app role login
 
 The `0004_app_role` migration creates `hookrail_app` as `NOLOGIN` (no password).
-Connect as the owner and grant login with the password you chose in step 2:
+The CNPG owner `hookrail` is granted `CREATEROLE` at bootstrap (so it can ALTER
+the role). Connect to the current primary and grant login with the password you
+chose in step 2:
 
 ```bash
-kubectl -n hookrail exec -it statefulset/postgres -- \
-  psql -U hookrail -d hookrail \
-  -c "ALTER ROLE hookrail_app LOGIN PASSWORD '<app-pw>'"
+PRIMARY=$(kubectl -n hookrail get pod \
+  -l cnpg.io/cluster=hookrail-pg,cnpg.io/instanceRole=primary \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl -n hookrail exec -it "$PRIMARY" -c postgres -- \
+  psql -U hookrail -d hookrail -v pw="<app-pw>" \
+  <<'SQL'
+ALTER ROLE hookrail_app LOGIN PASSWORD :'pw';
+SQL
 ```
 
-Use the same `<app-pw>` you set in `app_dsn` and `app_pw`.
+Use the same `<app-pw>` you set in `app_dsn` and `app_pw`. (`:'pw'` is psql's
+safe variable quoting — it works on stdin, not in a `-c` string.)
 
 ## 10. Wait for all deployments
 
@@ -184,13 +224,16 @@ curl -s --connect-timeout 5 http://<k3s-node-ip>:8082/healthz || echo "blocked (
 
 ## 12. Residual risks (before future hardening)
 
-- **App-tier HA, data-tier single-node.** The relay app tier (api, worker,
-  scheduler, admin, dashboard) now runs at 2 replicas with scheduler leader
-  election and worker graceful drain — see the README HA section. However,
-  Postgres, Redis, OTel, Prometheus, and Jaeger each run as a single pod
-  (`cloudflared` is bumped to 2 replicas in the prod overlay, but its live
-  cutover stays attended). Node failure still takes the data tier down.
-  Multi-node k3s and datastore HA are deferred to a future slice.
+- **App-tier HA + Postgres HA, but bounded by a single node.** The relay app tier
+  (api, worker, scheduler, admin, dashboard) runs at 2 replicas with scheduler
+  leader election and worker graceful drain, and **Postgres now runs as a CNPG
+  3-instance synchronous-quorum cluster with automated failover** (zero RPO for
+  accepted events). On a *single* k3s node this is **process-level** failover
+  only — surviving a Postgres pod/process loss + promotion — but **not node/disk
+  loss**, since all three CNPG instances and the app pods share the one node. Redis,
+  OTel, Prometheus, and Jaeger each still run as a single pod. **Redis HA**
+  (Sentinel) and **multi-node k3s** are deferred to future slices; add a second
+  node before claiming hardware-failure tolerance.
 - **Cloudflare Tunnel dependency.** Public access depends on the Cloudflare edge
   and the `cloudflared` Deployment (the tunnel runs as its own standalone
   Deployment, not a sidecar). A Cloudflare outage or tunnel disruption makes

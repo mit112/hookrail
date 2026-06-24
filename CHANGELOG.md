@@ -4,6 +4,13 @@ All notable changes documented here. Honest history — early entries include de
 
 ## [Unreleased]
 
+### Datastore HA — Postgres via CloudNativePG
+
+- **Postgres now runs as a CloudNativePG (CNPG) 3-instance cluster** (`Cluster/hookrail-pg`) replacing the single-replica StatefulSet — the last app-tier-adjacent SPOF. Synchronous quorum replication (`method: any, number: 1`) with `dataDurability: required` and `failoverQuorum: true` guarantees **zero RPO for accepted (202-acked) events**: a commit is acked only once a standby holds it, and a primary loss only promotes a standby proven to hold that WAL (no stale promotion). The operator manifest is vendored + pinned (`deploy/k8s/cnpg/operator-1.29.1.yaml`).
+- **Failover-resilient startup.** All DB-owning daemons (api/worker/scheduler/admin) now open the store via `OpenWithRetry` with a bounded `HOOKRAIL_DB_CONNECT_TIMEOUT` (default 30s) so a pod started mid-promotion waits for the new primary instead of crashlooping. The app connects to the CNPG `-rw` Service (current primary), reconnecting across a promotion.
+- **Verified by a new main-only `pg-failover` CI job** that kills the primary under continuous load and asserts a non-vacuous oracle: failover actually happened (new primary UID, `-rw` flipped, old pod rejoins as replica), load crossed the no-primary window, every accepted delivery succeeds, receiver-distinct == DB succeeded (exact), duplicates within a mechanism-derived bound, and no app pod restarts.
+- **Single-node honesty:** on the live single Mac-mini k3s node this is process-level failover only — node/disk-loss HA needs a second node. **Redis HA (Sentinel) is deferred** (Redis loss is already the at-least-once queue-loss case recovered by the sweeper).
+
 ### RBAC R3 — Producer-key topic scopes
 
 - **Each `hk_` producer key is restricted to a set of allowed topic patterns** (`MatchTopic` semantics: exact, `foo.*` prefix, or `*`). `POST /v1/events` returns **403** for a topic outside the key's scope — a leaked or over-broad key can no longer publish arbitrary topics. The denial happens before the event is recorded and before the idempotency replay path (no event row, no replayable result).
