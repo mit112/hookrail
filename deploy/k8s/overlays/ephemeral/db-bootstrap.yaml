@@ -34,8 +34,8 @@ spec:
               # already accepting TCP (initdb restart window / netpol propagation),
               # which previously surfaced as a one-shot "connection refused".
               for i in $(seq 1 60); do
-                if psql "$MIGRATOR_DSN" -v ON_ERROR_STOP=1 \
-                     -c "ALTER ROLE hookrail_app LOGIN PASSWORD '${APP_PW}'"; then
+                if psql "$MIGRATOR_DSN" -v ON_ERROR_STOP=1 -v pw="$APP_PW" \
+                     -c "ALTER ROLE hookrail_app LOGIN PASSWORD :'pw'"; then
                   echo "hookrail_app password set"; exit 0
                 fi
                 echo "postgres not ready, retry $i/60"; sleep 2

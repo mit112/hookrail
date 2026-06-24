@@ -20,7 +20,7 @@ spec:
           command:
             - sh
             - -c
-            - until pg_isready -h postgres; do sleep 1; done
+            - until pg_isready -h hookrail-pg-rw; do sleep 1; done
       containers:
         - name: migrate
           image: hookrail
