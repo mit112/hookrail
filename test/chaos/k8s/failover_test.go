@@ -27,7 +27,6 @@ func TestExperimentPGFailover(t *testing.T) {
 	ctx := context.Background()
 	key := mustEnv(t, "HOOKRAIL_PRODUCER_KEY")
 	adminTok := mustEnv(t, "HOOKRAIL_ADMIN_TOKEN")
-	ownerPw := envOr("HOOKRAIL_OWNER_PASSWORD", "hookrail")
 
 	// --- precondition gate: a vacuous proof on a non-HA cluster is worthless ---
 	if ri := readyInstances(t); ri != 3 {
@@ -44,13 +43,12 @@ func TestExperimentPGFailover(t *testing.T) {
 	defer stopAdmin()
 	stopRecv := portForward(t, "test-receiver", 19090, 9090)
 	defer stopRecv()
-	stopPG := portForward(t, "hookrail-pg-rw", 15432, 5432)
-	defer stopPG()
+	// DB reconciliation uses `kubectl exec` into the live primary (see fetchDB) —
+	// NOT a -rw port-forward, which would die when we kill the primary.
 
 	apiURL := "http://127.0.0.1:18080"
 	adminURL := "http://127.0.0.1:18082"
 	recvURL := "http://127.0.0.1:19090"
-	dsn := fmt.Sprintf("postgres://hookrail:%s@127.0.0.1:15432/hookrail?sslmode=disable", ownerPw)
 
 	// endpoint -> in-cluster receiver; subscription on e2e.*
 	epID := adminPost(t, adminURL, adminTok, "/v1/endpoints",
@@ -67,7 +65,7 @@ func TestExperimentPGFailover(t *testing.T) {
 
 	oldName, oldUID := primaryPod(t)
 	preRestarts := podRestartCounts(t, "app in (api,worker,scheduler)")
-	dbAtKill, _ := fetchDB(ctx, dsn)
+	dbAtKill, _ := fetchDB()
 	inFlightAtKill := dbAtKill.InFlight
 
 	// --- bucket B: kill primary, load keeps flowing through the no-primary window ---
@@ -146,7 +144,7 @@ func TestExperimentPGFailover(t *testing.T) {
 	// commit server-side on recovery; you cannot deliver an event never posted.
 	// dupBound: in-flight at kill (each may be redelivered once on failover) + slack.
 	dupBound := inFlightAtKill + totalAccepted/10 + 10
-	snap, err := pollRecovered(ctx, recvURL, dsn, totalAccepted, totalAttempts, dupBound, 150*time.Second)
+	snap, err := pollRecovered(recvURL, totalAccepted, totalAttempts, dupBound, 150*time.Second)
 	if err != nil {
 		t.Fatalf("fact2/4: %v", err)
 	}
@@ -226,10 +224,11 @@ func adminPost(t *testing.T, adminURL, tok, path, body string) string {
 // pollRecovered drains to terminal and asserts: nothing non-terminal/dead/cancelled,
 // succeeded in [expectedMin, expectedMax], receiver-distinct == DB succeeded (exact),
 // duplicates <= dupBound. Adapted from test/chaos/harness_test.go PollRecoveredBounded.
-func pollRecovered(ctx context.Context, recvURL, dsn string, expectedMin, expectedMax, dupBound int, deadline time.Duration) (struct {
+func pollRecovered(recvURL string, expectedMin, expectedMax, dupBound int, deadline time.Duration) (struct {
 	DB    DBState
 	Stats Stats
 }, error) {
+	ctx := context.Background()
 	type result = struct {
 		DB    DBState
 		Stats Stats
@@ -238,7 +237,7 @@ func pollRecovered(ctx context.Context, recvURL, dsn string, expectedMin, expect
 	until := time.Now().Add(deadline)
 	for time.Now().Before(until) {
 		st, e1 := fetchStats(ctx, recvURL)
-		db, e2 := fetchDB(ctx, dsn)
+		db, e2 := fetchDB()
 		if e1 == nil && e2 == nil {
 			last = result{DB: db, Stats: st}
 			if db.NonTerminal() == 0 && db.DeadLettered == 0 && db.Cancelled == 0 &&

@@ -21,8 +21,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 const ns = "hookrail"
@@ -232,24 +230,46 @@ func fetchStats(ctx context.Context, recvURL string) (Stats, error) {
 	return s, json.NewDecoder(resp.Body).Decode(&s)
 }
 
-func fetchDB(ctx context.Context, dsn string) (DBState, error) {
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		return DBState{}, err
+// fetchDB queries the deliveries state counts by exec-ing psql in the CURRENT
+// primary pod (resolved fresh each call). A host port-forward to the -rw service
+// would die when we kill the primary it bound to; exec re-resolves the live
+// primary so reconciliation survives the failover.
+func fetchDB() (DBState, error) {
+	primary, err := kubectlTry("-n", ns, "get", "pod",
+		"-l", "cnpg.io/cluster=hookrail-pg,cnpg.io/instanceRole=primary",
+		"-o", "jsonpath={.items[0].metadata.name}")
+	if err != nil || primary == "" {
+		return DBState{}, fmt.Errorf("no primary for DB query: %v", err)
 	}
-	defer func() { _ = conn.Close(ctx) }()
-	var d DBState
-	err = conn.QueryRow(ctx, `
-		SELECT count(*),
-		       count(*) FILTER (WHERE state='succeeded'),
-		       count(*) FILTER (WHERE state='pending'),
-		       count(*) FILTER (WHERE state='in_flight'),
-		       count(*) FILTER (WHERE state='retry_scheduled'),
-		       count(*) FILTER (WHERE state='dead_lettered'),
-		       count(*) FILTER (WHERE state='cancelled')
-		FROM deliveries`).
-		Scan(&d.Total, &d.Succeeded, &d.Pending, &d.InFlight, &d.RetryScheduled, &d.DeadLettered, &d.Cancelled)
-	return d, err
+	const q = `SELECT count(*),count(*) FILTER (WHERE state='succeeded'),` +
+		`count(*) FILTER (WHERE state='pending'),count(*) FILTER (WHERE state='in_flight'),` +
+		`count(*) FILTER (WHERE state='retry_scheduled'),count(*) FILTER (WHERE state='dead_lettered'),` +
+		`count(*) FILTER (WHERE state='cancelled') FROM deliveries`
+	out, err := kubectlTry("-n", ns, "exec", primary, "-c", "postgres", "--",
+		"psql", "-U", "postgres", "-d", "hookrail", "-tAF,", "-c", q)
+	if err != nil {
+		return DBState{}, fmt.Errorf("psql exec: %v (%s)", err, out)
+	}
+	// take the single comma-separated data line (ignore any NOTICE/warning lines)
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Count(l, ",") == 6 {
+			line = strings.TrimSpace(l)
+			break
+		}
+	}
+	parts := strings.Split(line, ",")
+	if len(parts) != 7 {
+		return DBState{}, fmt.Errorf("unexpected psql output: %q", out)
+	}
+	d := DBState{}
+	fields := []*int{&d.Total, &d.Succeeded, &d.Pending, &d.InFlight, &d.RetryScheduled, &d.DeadLettered, &d.Cancelled}
+	for i, p := range parts {
+		if _, e := fmt.Sscanf(strings.TrimSpace(p), "%d", fields[i]); e != nil {
+			return DBState{}, fmt.Errorf("parse field %d %q: %v", i, p, e)
+		}
+	}
+	return d, nil
 }
 
 func envOr(k, def string) string {
