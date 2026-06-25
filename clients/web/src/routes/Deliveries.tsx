@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useDeliveries, type DeliveryFilters } from "../query/deliveries";
 import type { TDeliveryListRow } from "../api/schemas";
+import { StatePill } from "../components/StatePill";
 
 export function Deliveries() {
   const [cursors, setCursors] = useState<string[]>([""]);
@@ -90,7 +91,7 @@ export function Deliveries() {
               <td><Link to={`/deliveries/${d.id}`}>{d.id}</Link></td>
               <td>{d.event_id}</td>
               <td>{d.endpoint_id}</td>
-              <td>{d.state}</td>
+              <td><StatePill state={d.state} /></td>
             </tr>
           ))}
         </tbody>

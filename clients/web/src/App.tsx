@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, NavLink } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SessionGate } from "./auth/SessionGate";
-import { useRole, roleAtLeast, type Role } from "./auth/role";
+import { fetchSession, logout } from "./auth/session";
+import { useRole, roleAtLeast, RequireRole, type Role } from "./auth/role";
 import { Endpoints } from "./routes/Endpoints";
 import { EndpointDetail } from "./routes/EndpointDetail";
 import { EndpointNew, EndpointEdit } from "./routes/EndpointForm";
@@ -20,9 +22,54 @@ function RoleRoute({ min, children }: { min: Role; children: ReactNode }) {
   return roleAtLeast(useRole(), min) ? <>{children}</> : <Navigate to="/endpoints" replace />;
 }
 
+const navClass = ({ isActive }: { isActive: boolean }) =>
+  "nav-item" + (isActive ? " is-active" : "");
+
+function AppShell({ children }: { children: ReactNode }) {
+  const role = useRole();
+  const qc = useQueryClient();
+  const { data: session } = useQuery({ queryKey: ["session"], queryFn: fetchSession });
+  const signOut = async () => {
+    try {
+      await logout();
+    } finally {
+      qc.invalidateQueries({ queryKey: ["session"] });
+    }
+  };
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="brand-name">Hookrail</span>
+          <span className="brand-sub">delivery plane</span>
+        </div>
+        <div className="topbar-right">
+          {session?.username && <span className="who">{session.username}</span>}
+          <span className={`role-badge role-badge--${role}`}>{role}</span>
+          <button className="btn btn--ghost" onClick={signOut}>Sign out</button>
+        </div>
+      </header>
+      <div className="app-body">
+        <nav className="sidebar" aria-label="Primary">
+          <NavLink to="/endpoints" className={navClass}>Endpoints</NavLink>
+          <NavLink to="/subscriptions" className={navClass}>Subscriptions</NavLink>
+          <NavLink to="/deliveries" className={navClass}>Deliveries</NavLink>
+          <NavLink to="/dlq" className={navClass}>Dead letter</NavLink>
+          <RequireRole min="operator">
+            <NavLink to="/test-event" className={navClass}>Test event</NavLink>
+          </RequireRole>
+        </nav>
+        <main className="app-main">{children}</main>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   return (
     <SessionGate>
+      <AppShell>
       <Routes>
         <Route path="/" element={<Navigate to="/endpoints" replace />} />
         <Route path="/endpoints" element={<Endpoints />} />
@@ -38,6 +85,7 @@ export function App() {
         <Route path="/dlq" element={<DLQ />} />
         <Route path="/test-event" element={<RoleRoute min="operator"><TestEvent /></RoleRoute>} />
       </Routes>
+      </AppShell>
     </SessionGate>
   );
 }

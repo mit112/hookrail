@@ -84,7 +84,7 @@ export function DLQ() {
               <td>
                 {!d.replayed_at && (
                   <RequireRole min="operator">
-                    <button onClick={() => replay.mutate(d.delivery_id)} disabled={replay.isPending}>
+                    <button className="btn--ghost" onClick={() => replay.mutate(d.delivery_id)} disabled={replay.isPending}>
                       Replay
                     </button>
                   </RequireRole>
