@@ -13,7 +13,32 @@ dead-letter queues, per-endpoint rate limiting, and full observability.
 > admin dashboard, a single-node k3s deploy, the chaos + curated-Grafana suite (Slice D),
 > and opt-in strict-FIFO per-key ordering (P2). The service is pre-1.0; no compatibility guarantees yet.
 
+<p align="center">
+  <img src="docs/deploy/cutover-demo/dashboard-deliveries.png" alt="Hookrail admin dashboard — live delivery state" width="800">
+  <br><sub>The admin dashboard: live delivery state, per-attempt history, and dead-letter replay.</sub>
+</p>
+
+**At a glance:** sustained **200 events/s** at **~58 ms p95** end-to-end (ingest→consumer),
+**0 lost / 0 duplicate** deliveries across load tests — see [baseline](docs/baseline/2026-06-11.md).
+
 ## Architecture
+
+```mermaid
+flowchart TB
+    P[Producers] -->|POST /v1/events| API[Ingress API]
+    API -->|one PG txn: event + deliveries| PG[(PostgreSQL<br/>SOURCE OF TRUTH<br/>state machine · leases · attempts)]
+    API -.->|best-effort XADD| R[(Redis Streams<br/>lossy hot path<br/>delivery_ids only · consumer group)]
+    API -->|202 event_id, delivery_ids| P
+    PG -->|PG sweeper 30s: republish due/stuck| R
+    R -->|claim| W[Delivery workers<br/>CAS-claim + lease fencing]
+    PG -->|claim| W
+    W -->|SSRF-guarded signed POST| EP[Subscriber endpoints]
+    W -->|attempt + transition in ONE txn, then XACK| PG
+```
+
+<sub>Two overlapping recovery layers — Redis PEL (seconds) and the PG sweeper (30s) — can both fire safely: **duplicates possible, loss impossible.** Losing Redis delays deliveries; it never drops them.</sub>
+
+<details><summary>ASCII version</summary>
 
 ```text
  producers ──POST──► Ingress API ──one PG txn: event + deliveries──► 202
@@ -28,6 +53,8 @@ dead-letter queues, per-endpoint rate limiting, and full observability.
    Delivery workers: CAS-claim → SSRF-guarded signed POST → classify
    → attempt + transition in ONE txn → XACK
 ```
+
+</details>
 
 Alongside the data path: **`hookrail-admin`** (`:8082`) is an internal CRUD /
 query / DLQ-replay surface (never exposed to producers), and the **dashboard

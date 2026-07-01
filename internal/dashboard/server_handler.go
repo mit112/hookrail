@@ -13,6 +13,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.requireRole(admin.RoleViewer, s.handleLogout))
 	mux.HandleFunc("GET /api/session", s.handleSession)
+	// public read-only demo: config hint (always) + passwordless viewer session
+	// (404 unless demo mode is enabled; see demo.go for the fail-closed guards)
+	mux.HandleFunc("GET /api/public-config", s.handlePublicConfig)
+	mux.HandleFunc("POST /api/demo-login", s.handleDemoLogin)
 	mux.HandleFunc("POST /api/test-event", s.requireRole(admin.RoleOperator, s.handleTestEvent))
 	// allowlist admin proxy, each gated at its mirrored minimum role
 	for _, rt := range s.adminRoutes() {

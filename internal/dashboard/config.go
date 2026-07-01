@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/mit112/hookrail/internal/admin"
 )
 
 type Config struct {
@@ -26,6 +28,13 @@ type Config struct {
 	Users          *Users
 	RoleTokens     *RoleTokens
 	AttestInterval time.Duration
+
+	// Public read-only demo. When DemoMode is set, the SPA auto-authenticates
+	// visitors as DemoUser via POST /api/demo-login. DemoUser MUST resolve to
+	// the viewer role in the users file — validated fail-closed at load, so the
+	// demo can never hand a public visitor anything above read-only.
+	DemoMode bool
+	DemoUser string
 }
 
 func LoadConfig() (Config, error) {
@@ -91,6 +100,23 @@ func LoadConfig() (Config, error) {
 			return c, fmt.Errorf("HOOKRAIL_DASHBOARD_ATTEST_INTERVAL must be > 0")
 		}
 		c.AttestInterval = d
+	}
+
+	// Public demo mode: fail closed. If enabled, the configured demo user must
+	// exist and be viewer — never anything with write/destructive privileges.
+	c.DemoMode = os.Getenv("HOOKRAIL_DASHBOARD_DEMO_MODE") == "true"
+	if c.DemoMode {
+		c.DemoUser = strings.TrimSpace(os.Getenv("HOOKRAIL_DASHBOARD_DEMO_USER"))
+		if c.DemoUser == "" {
+			c.DemoUser = "demo"
+		}
+		role, ok := c.Users.RoleOf(c.DemoUser)
+		if !ok {
+			return c, fmt.Errorf("HOOKRAIL_DASHBOARD_DEMO_MODE is set but demo user %q is not in the users file", c.DemoUser)
+		}
+		if role != admin.RoleViewer {
+			return c, fmt.Errorf("demo user %q must have role viewer, has %q", c.DemoUser, role.String())
+		}
 	}
 	return c, nil
 }
