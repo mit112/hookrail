@@ -18,3 +18,17 @@ export async function login(username: string, password: string): Promise<void> {
 export async function logout(): Promise<void> {
   await request("POST", "/api/logout");
 }
+
+export interface PublicConfig {
+  demo: boolean;
+}
+
+export async function fetchPublicConfig(): Promise<PublicConfig> {
+  return request<PublicConfig>("GET", "/api/public-config");
+}
+
+// demoLogin requests a passwordless read-only (viewer) session. Only succeeds
+// when the server has demo mode enabled; otherwise it 404s.
+export async function demoLogin(): Promise<void> {
+  await request("POST", "/api/demo-login");
+}

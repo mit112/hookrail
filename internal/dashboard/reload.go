@@ -3,9 +3,12 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/mit112/hookrail/internal/admin"
 )
 
 // InitialAttest probes + publishes the startup role tokens. Callers may start
@@ -27,6 +30,15 @@ func (s *Server) Reload(ctx context.Context) error {
 	rt, rerr := LoadRoleTokens(s.cfg.RoleTokensFile)
 	if uerr != nil || rerr != nil {
 		return errors.Join(uerr, rerr) // keep both old; apply nothing
+	}
+	// Demo invariant, enforced on reload too (not just at load): when the
+	// dashboard is publicly exposed in demo mode, the demo user must stay
+	// viewer. Refuse a reload that would promote it, so an already-issued
+	// public demo cookie can never start authorizing above read-only.
+	if s.cfg.DemoMode {
+		if role, ok := u.RoleOf(s.cfg.DemoUser); !ok || role != admin.RoleViewer {
+			return fmt.Errorf("refusing reload: demo user %q must remain viewer (public demo invariant)", s.cfg.DemoUser)
+		}
 	}
 	// Users are swapped BEFORE attestation completes, by design. This prioritizes
 	// immediate revocation (a deleted/downgraded user loses access on the next

@@ -1,0 +1,123 @@
+# Public read-only demo overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --build
+#
+# Exposes ONLY the dashboard (:8085) to the public via Tailscale Funnel, with zero
+# write capability. Hardening vs. the base stack:
+#   * NO host ports are published except the dashboard's 127.0.0.1:8085 — the
+#     ingest API (:8080), admin API (:8082), and datastores are reachable only on
+#     the Docker network, never from the LAN/tailnet/internet (Codex BLOCKER);
+#   * the admin API's static bearer token is a per-deploy random secret from .env,
+#     not the committed dev token (Codex BLOCKER);
+#   * the dashboard session-signing key is a per-deploy random secret from .env,
+#     not a value in source control (Codex MEDIUM);
+#   * the dashboard users file holds a SINGLE viewer account with a random password
+#     — there is no admin/operator login path to reach publicly;
+#   * DEMO_MODE lets the SPA auto-authenticate visitors as that viewer; the demo
+#     invariant (demo user == viewer) is enforced at load AND on reload;
+#   * Secure cookies (the public edge is HTTPS);
+#   * a seeder continuously produces varied traffic so the dashboard always shows
+#     live deliveries, retries, and dead-letters.
+#
+# Only funnel :8085. Never `tailscale funnel` any other port.
+name: hookrail
+services:
+  # Publish NO host ports for anything but the dashboard: every service reaches
+  # its peers over the Docker network by name, so the ingest API, admin API, and
+  # datastores are simply unreachable off-box. Only :8085 is funneled.
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  toxiproxy:
+    ports: !reset []
+  api:
+    ports: !reset []
+  admin:
+    ports: !reset []
+    environment:
+      # per-deploy random admin bearer (base ships a committed dev token)
+      HOOKRAIL_ADMIN_TOKEN: ${DEMO_ADMIN_TOKEN}
+  test-receiver:
+    ports: !reset []
+  prometheus:
+    ports: !reset []
+  grafana:
+    ports: !reset []
+  jaeger:
+    ports: !reset []
+
+  dashboard-provisioner:
+    command:
+      - |
+        set -eu
+        pk=$$(hookrail-ctl create-producer-key -name dashboard -scope '*' | awk -F= '/^producer_key=/{print $$2}')
+        case "$$pk" in hk_*) ;; *) echo "FATAL: empty/invalid producer key" >&2; exit 1;; esac
+        printf '%s' "$$pk" > /run/secrets/producer_key
+        chmod 0644 /run/secrets/producer_key
+        : > /run/secrets/role_tokens
+        for r in viewer operator admin; do
+          tok=$$(hookrail-ctl create-admin-token -role "$$r" | awk -F= '/^admin_token=/{print $$2}')
+          case "$$tok" in hkadm_*) ;; *) echo "FATAL: empty/invalid $$r token" >&2; exit 1;; esac
+          echo "$$r:$$tok" >> /run/secrets/role_tokens
+        done
+        chmod 0644 /run/secrets/role_tokens
+        # Public demo: ONLY a viewer account, with a random password so the
+        # password login path cannot be used at all. Visitors get in via the
+        # passwordless, viewer-only /api/demo-login (see internal/dashboard/demo.go).
+        rndpw=$$(head -c 24 /dev/urandom | base64)
+        h=$$(hookrail-dash-hash -hash-only -password "$$rndpw")
+        [ -n "$$h" ] || { echo "FATAL: empty users hash" >&2; exit 1; }
+        printf 'demo:%s:viewer\n' "$$h" > /run/secrets/dashboard_users
+        chmod 0644 /run/secrets/dashboard_users
+
+  dashboard:
+    # !override (not merge) so we replace the base 0.0.0.0:8085 with a
+    # localhost-only bind; Funnel connects to localhost:8085.
+    ports: !override ["127.0.0.1:8085:8085"]
+    environment:
+      HOOKRAIL_DASHBOARD_DEMO_MODE: "true"
+      HOOKRAIL_DASHBOARD_DEMO_USER: "demo"
+      # public edge is HTTPS (Funnel), so issue Secure cookies
+      HOOKRAIL_DASHBOARD_INSECURE_COOKIE: "false"
+      # per-deploy random session key from .env (not committed to source)
+      HOOKRAIL_DASHBOARD_SESSION_KEY: ${HOOKRAIL_DASHBOARD_SESSION_KEY}
+
+  demo-seeder:
+    build: ../..
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        # Create three subscriptions once, covering the interesting outcomes:
+        #   succeed  -> delivered   flap -> retried-then-delivered   fail -> dead-lettered
+        out=$$(hookrail-ctl seed -url http://test-receiver:9090/succeed -topic 'demo.orders.*')
+        pk=$$(printf '%s' "$$out" | awk -F= '/^producer_key=/{print $$2}')
+        case "$$pk" in hk_*) ;; *) echo "FATAL: seed produced no producer key" >&2; exit 1;; esac
+        hookrail-ctl seed -url http://test-receiver:9090/flap    -topic 'demo.flaky.*' >/dev/null || true
+        hookrail-ctl seed -url http://test-receiver:9090/fail/9999 -topic 'demo.retry.*' >/dev/null || true
+        echo "demo-seeder: seeded; producing events…"
+        n=0
+        while true; do
+          n=$$((n + 1))
+          for t in demo.orders.created demo.flaky.ping demo.retry.sync; do
+            wget -q -O /dev/null \
+              --header="Authorization: Bearer $$pk" \
+              --header="Content-Type: application/json" \
+              --post-data="{\"topic\":\"$$t\",\"payload\":{\"seq\":$$n,\"at\":\"demo\"}}" \
+              http://api:8080/v1/events || true
+          done
+          sleep 4
+        done
+    environment:
+      DATABASE_URL: postgres://hookrail:hookrail@postgres:5432/hookrail?sslmode=disable
+      REDIS_ADDR: redis:6379
+      HOOKRAIL_MASTER_KEY: ${HOOKRAIL_MASTER_KEY}
+      HOOKRAIL_ALLOW_HTTP: "true"
+      HOOKRAIL_ALLOW_CIDRS: "172.28.0.0/16"
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      api: { condition: service_started }
+      test-receiver: { condition: service_started }

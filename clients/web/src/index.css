@@ -79,6 +79,13 @@ body {
 .topbar-right { display: flex; align-items: center; gap: 12px; }
 .who { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
 
+.demo-banner {
+  padding: 10px 32px; font-size: 13px; line-height: 1.5;
+  color: var(--accent-strong); background: var(--accent-tint);
+  border-bottom: 1px solid var(--accent-ring);
+}
+.demo-banner a { color: var(--accent-strong); font-weight: 560; }
+
 .app-body { display: flex; flex: 1; align-items: stretch; }
 
 .sidebar {
