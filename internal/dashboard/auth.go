@@ -18,7 +18,9 @@ type Server struct {
 	sessions *Sessions
 	usersPtr atomic.Pointer[Users]
 	attest   *attestState // role-token attestation gate (M3/M4)
-	thr      *throttle
+	thr      *throttle    // per-IP guard on the password-login path
+	sessThr  *throttle    // per-session guard on the authenticated read/proxy surface
+	apiThr   *throttle    // global backstop on the authenticated read/proxy surface
 	log      *slog.Logger
 	now      func() time.Time
 }
@@ -29,8 +31,21 @@ func NewServer(cfg Config) *Server {
 		sessions: NewSessions(cfg),
 		attest:   newAttestState(),
 		thr:      newThrottle(10, time.Minute),
-		log:      slog.Default(),
-		now:      time.Now,
+		// Backpressure on the authenticated read/proxy surface, applied only
+		// AFTER a valid session is confirmed (so unauthenticated traffic is 401'd
+		// and never burns a bucket). Two layers:
+		//   - sessThr: per-session cap so one visitor's runaway loop throttles
+		//     only their own session, not everyone else's (fairness).
+		//   - apiThr: a generous GLOBAL ceiling that protects the datastore on a
+		//     single-box public demo. This is the hard floor: under a determined
+		//     mint-and-hammer attack (demo-login is intentionally unthrottled)
+		//     all sessions share it and may see 429s — an accepted trade so the
+		//     box survives rather than falling over. Behind an IP-collapsing edge
+		//     this cannot be avoided at the app layer without a real client id.
+		sessThr: newThrottle(300, time.Minute),
+		apiThr:  newThrottle(3000, time.Minute),
+		log:     slog.Default(),
+		now:     time.Now,
 	}
 	s.usersPtr.Store(cfg.Users)
 	return s
@@ -50,6 +65,15 @@ func clientIP(r *http.Request) string {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// In demo mode there is no password account to log into (the only user is a
+	// random-password viewer reached via /api/demo-login), so the password path
+	// serves no purpose and its per-IP throttle would collapse to a single
+	// shared bucket behind the Funnel — letting one visitor lock everyone out.
+	// Disable it entirely; visitors authenticate through /api/demo-login.
+	if s.cfg.DemoMode {
+		httpx.Problem(w, http.StatusNotFound, "not found", "password login is disabled in demo mode")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if r.Header.Get("Content-Type") != "application/json" {
 		httpx.Problem(w, http.StatusUnsupportedMediaType, "bad content-type", "application/json required")

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { request } from "../api/client";
 import { DLQRow, Page } from "../api/schemas";
 
@@ -19,6 +19,7 @@ export function useDLQ(filters?: DLQFilters, cursor?: string) {
   const qs = params.toString();
   return useQuery({
     queryKey: ["dlq", filters?.endpoint_id ?? "", filters?.replayed ?? "", filters?.since ?? "", filters?.until ?? "", cursor ?? ""],
+    placeholderData: keepPreviousData,
     queryFn: () =>
       request("GET", `/v1/dlq${qs ? "?" + qs : ""}`, { schema: Page(DLQRow) }),
   });
