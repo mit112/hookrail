@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { request } from "../api/client";
 import { SubscriptionRow, Page } from "../api/schemas";
 
@@ -9,6 +9,7 @@ export function useSubscriptions(endpointId?: string, cursor?: string) {
   const qs = params.toString();
   return useQuery({
     queryKey: ["subscriptions", endpointId ?? "", cursor ?? ""],
+    placeholderData: keepPreviousData,
     queryFn: () =>
       request("GET", `/v1/subscriptions${qs ? "?" + qs : ""}`, { schema: Page(SubscriptionRow) }),
   });

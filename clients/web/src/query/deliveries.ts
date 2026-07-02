@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { request } from "../api/client";
 import { DeliveryListRow, DeliveryTimeline, Page } from "../api/schemas";
 
@@ -19,6 +19,7 @@ export function useDeliveries(filters?: DeliveryFilters, cursor?: string) {
   const qs = params.toString();
   return useQuery({
     queryKey: ["deliveries", filters?.state ?? "", filters?.endpoint_id ?? "", filters?.topic ?? "", filters?.event_id ?? "", cursor ?? ""],
+    placeholderData: keepPreviousData,
     queryFn: () =>
       request("GET", `/v1/deliveries${qs ? "?" + qs : ""}`, { schema: Page(DeliveryListRow) }),
   });

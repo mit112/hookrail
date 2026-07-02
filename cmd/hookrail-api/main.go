@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -52,9 +53,15 @@ func main() {
 	defer q.Close()
 	q.MaxLen = cfg.StreamMaxLen
 
+	// Per-producer-key ingress limiter. NOTE: this is per-API-replica and in
+	// process (§4.3), so the effective ceiling is rate × replica count — see
+	// SPEC.md §10 / README "Honest limitations". Tunable so operators aren't
+	// forced to rebuild to change it.
+	ingressRate := envFloat("HOOKRAIL_INGRESS_RATE_RPS", 500)
+	ingressBurst := envFloat("HOOKRAIL_INGRESS_BURST", 1000)
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(s, q, ratelimit.NewRegistry(500, 1000), cfg.IdemTTL, cfg.OrderingKeyMaxLen, cfg.OrderedKeyBacklogMax).Handler(),
+		Handler:           api.New(s, q, ratelimit.NewRegistry(ingressRate, ingressBurst), cfg.IdemTTL, cfg.OrderingKeyMaxLen, cfg.OrderedKeyBacklogMax).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -71,4 +78,14 @@ func main() {
 		slog.Error("serve", "err", err)
 		os.Exit(1)
 	}
+}
+
+func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return f
+		}
+		slog.Warn("invalid value, using default", "env", key, "value", v, "default", def)
+	}
+	return def
 }

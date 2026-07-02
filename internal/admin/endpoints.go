@@ -16,7 +16,10 @@ type createEndpointReq struct {
 
 func (s *Server) createEndpoint(w http.ResponseWriter, r *http.Request) {
 	var req createEndpointReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+	if !decodeJSON(w, r, &req, maxAdminBody) {
+		return
+	}
+	if req.URL == "" {
 		httpx.Problem(w, http.StatusBadRequest, "invalid body", `expected {"url": string, "description": string}`)
 		return
 	}
@@ -71,8 +74,7 @@ type patchEndpointReq struct {
 
 func (s *Server) patchEndpoint(w http.ResponseWriter, r *http.Request) {
 	var req patchEndpointReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.Problem(w, http.StatusBadRequest, "invalid body", `expected {"url"?: string, "description"?: string}`)
+	if !decodeJSON(w, r, &req, maxAdminBody) {
 		return
 	}
 	if req.URL != nil { // SSRF-validate ONLY when the URL is being changed

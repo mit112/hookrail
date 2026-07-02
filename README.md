@@ -313,6 +313,13 @@ These are documented design trade-offs, not bugs.
   below it. Burst is floored at 1, so even sub-0.5 rps values eventually deliver.
   Tunables: `HOOKRAIL_RL_TIMEOUT_MS` (default 50ms), `HOOKRAIL_RL_TTL_FLOOR_S`
   (default 60s).
+- **Delivered payloads are JSON-canonicalized, not byte-preserved.** Payloads
+  are stored as Postgres `JSONB`, so the bytes delivered to a subscriber (and the
+  bytes the HMAC signature covers) are the canonical re-serialization — keys may
+  be reordered and insignificant whitespace dropped versus what the producer
+  POSTed. Signing stays self-consistent (Hookrail signs exactly the bytes it
+  sends), so signature verification always succeeds; only consumers that expect
+  byte-identical passthrough of their original JSON are affected.
 - **Secret rotation & URL cutover is eventual.** After `rotate-secret`, the old
   secret stays valid until every in-flight attempt completes or times out. The new
   secret is returned once and never stored in plaintext.
@@ -322,6 +329,25 @@ These are documented design trade-offs, not bugs.
 - **Ingest ↔ delete reconciliation is eventual.** A delivery created for a
   subscription deleted shortly before/after ingest may still be attempted; the
   system converges to correct exclusion.
+
+### Scale ceilings
+
+The measured baseline holds at modest subscription counts and a single-box
+datastore. The known ceilings, before they'd need work:
+
+- **Ingest fan-out is O(active subscriptions).** Each event loads the active
+  subscription set and topic-matches in the API process rather than in SQL, so
+  ingest cost grows with total subscriptions, not just matches. Fine into the
+  low thousands; beyond that it wants an indexed/materialized topic match.
+- **Producer ingress rate limiting is per-replica.** Like the non-override
+  delivery path, the per-key ingress limiter is in-process, so the effective
+  ceiling is `rate × API replica count`. Tunable via `HOOKRAIL_INGRESS_RATE_RPS`
+  / `HOOKRAIL_INGRESS_BURST` (no rebuild required); a global cap would need the
+  same Redis token bucket the delivery path already uses.
+- **Single Redis stream + consumer group.** All deliveries flow through one
+  stream/group; the worker pool size is tunable (`HOOKRAIL_WORKER_POOL_SIZE`)
+  but Sentinel provides failover, not horizontal scale — the master is one node.
+  Beyond low-thousands ev/s this wants sharded streams or Redis Cluster.
 
 ### Admin & dashboard
 

@@ -43,6 +43,19 @@ func (s *Server) requireRole(min admin.Role, next http.HandlerFunc) http.Handler
 			httpx.Problem(w, http.StatusUnauthorized, "not authenticated", "user no longer exists")
 			return
 		}
+		// Backpressure on the authenticated surface, before the request reaches
+		// the admin API / Postgres. Per-session first (a single visitor's loop
+		// throttles only their own session), then a global datastore backstop.
+		// Only authenticated requests reach here, so an anonymous flood is 401'd
+		// above and never consumes these buckets.
+		if c, err := r.Cookie(s.cookieName()); err == nil && !s.sessThr.allow(c.Value, s.now()) {
+			httpx.Problem(w, http.StatusTooManyRequests, "too many requests", "slow down")
+			return
+		}
+		if !s.apiThr.allow("global", s.now()) {
+			httpx.Problem(w, http.StatusTooManyRequests, "server busy", "the demo is under heavy load; retry shortly")
+			return
+		}
 		if role < min {
 			httpx.Problem(w, http.StatusForbidden, "insufficient role", "requires role "+min.String())
 			return
@@ -53,7 +66,7 @@ func (s *Server) requireRole(min admin.Role, next http.HandlerFunc) http.Handler
 				httpx.Problem(w, http.StatusUnsupportedMediaType, "bad content-type", "application/json required")
 				return
 			}
-			if o := r.Header.Get("Origin"); o != "" && o != originOf(r) {
+			if !sameOrigin(r) {
 				httpx.Problem(w, http.StatusForbidden, "cross-origin", "origin not allowed")
 				return
 			}

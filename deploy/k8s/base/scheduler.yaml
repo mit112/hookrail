@@ -48,12 +48,12 @@ spec:
                   key: master_key
           readinessProbe:
             httpGet:
-              path: /metrics
+              path: /readyz
               port: 8083
             initialDelaySeconds: 5
           livenessProbe:
             httpGet:
-              path: /metrics
+              path: /healthz
               port: 8083
             initialDelaySeconds: 15
           resources:

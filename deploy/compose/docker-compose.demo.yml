@@ -40,6 +40,16 @@ services:
       HOOKRAIL_ADMIN_TOKEN: ${DEMO_ADMIN_TOKEN}
   test-receiver:
     ports: !reset []
+    # Presentable hostnames for the public dashboard: the seeded subscriptions
+    # deliver to these aliases instead of the internal "test-receiver" fixture
+    # name (which would leak internal topology to visitors). All three resolve to
+    # this one receiver, which routes purely by path, so behavior is unchanged.
+    networks:
+      default:
+        aliases:
+          - orders-service
+          - payments-service
+          - analytics-service
   prometheus:
     ports: !reset []
   grafana:
@@ -92,11 +102,11 @@ services:
         set -eu
         # Create three subscriptions once, covering the interesting outcomes:
         #   succeed  -> delivered   flap -> retried-then-delivered   fail -> dead-lettered
-        out=$$(hookrail-ctl seed -url http://test-receiver:9090/succeed -topic 'demo.orders.*')
+        out=$$(hookrail-ctl seed -url http://orders-service:9090/succeed -topic 'demo.orders.*')
         pk=$$(printf '%s' "$$out" | awk -F= '/^producer_key=/{print $$2}')
         case "$$pk" in hk_*) ;; *) echo "FATAL: seed produced no producer key" >&2; exit 1;; esac
-        hookrail-ctl seed -url http://test-receiver:9090/flap    -topic 'demo.flaky.*' >/dev/null || true
-        hookrail-ctl seed -url http://test-receiver:9090/fail/9999 -topic 'demo.retry.*' >/dev/null || true
+        hookrail-ctl seed -url http://payments-service:9090/flap     -topic 'demo.flaky.*' >/dev/null || true
+        hookrail-ctl seed -url http://analytics-service:9090/fail/9999 -topic 'demo.retry.*' >/dev/null || true
         echo "demo-seeder: seeded; producing events…"
         n=0
         while true; do

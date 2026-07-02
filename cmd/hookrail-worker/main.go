@@ -125,9 +125,24 @@ func main() {
 		}
 	}
 	go el.Run(intakeCtx)
+	// Liveness: the dispatch loop pumps this each iteration. /healthz reports 503
+	// if NO worker in the pool has looped within the ttl — so a wedged/exited
+	// dispatch loop is restarted by Kubernetes instead of passing forever (as a
+	// bare /metrics probe would). ttl is generous vs. one iteration's worst case
+	// (2s intake block + a single ~15s HTTP attempt).
+	alive := obs.NewLiveness(60 * time.Second)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.Handler())
+		mux.HandleFunc("GET /healthz", alive.Handler)
+		mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+			if err := s.Pool.Ping(r.Context()); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("postgres unreachable\n"))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
 		_ = (&http.Server{
 			Addr:              ":8081",
 			Handler:           mux,
@@ -139,7 +154,7 @@ func main() {
 	}()
 	tracker := worker.NewInFlight()
 
-	const poolSize = 8 // goroutine pool (§3.4)
+	poolSize := envInt("HOOKRAIL_WORKER_POOL_SIZE", 8) // goroutine pool (§3.4)
 	var wg sync.WaitGroup
 	for i := 0; i < poolSize; i++ {
 		w := &worker.Worker{
@@ -148,8 +163,9 @@ func main() {
 			Backoff: backoff.Default(), Limits: limits,
 			Global:    global,
 			MasterKey: cfg.MasterKey, Lease: 30 * time.Second,
-			Consumer: hostConsumer(host, i),
-			InFlight: tracker,
+			Consumer:  hostConsumer(host, i),
+			InFlight:  tracker,
+			Heartbeat: alive.Beat,
 		}
 		wg.Add(1)
 		go func() { defer wg.Done(); _ = w.Run(intakeCtx, workCtx) }()
@@ -178,6 +194,16 @@ func envFloat(key string, def float64) float64 {
 	if v := os.Getenv(key); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			return f
+		}
+		slog.Warn("invalid value, using default", "env", key, "value", v, "default", def)
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
 		}
 		slog.Warn("invalid value, using default", "env", key, "value", v, "default", def)
 	}
