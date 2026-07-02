@@ -47,6 +47,11 @@ type Config struct {
 	DrainDeadline       time.Duration // HOOKRAIL_DRAIN_DEADLINE, default 25s, validated < 30s
 	DrainRetryJitterMax time.Duration // HOOKRAIL_DRAIN_RETRY_JITTER_MAX, default 2s
 
+	// Tunable capacities (env-configurable so operators need not rebuild).
+	WorkerPoolSize int     // HOOKRAIL_WORKER_POOL_SIZE, default 8
+	IngressRateRPS float64 // HOOKRAIL_INGRESS_RATE_RPS, default 500
+	IngressBurst   float64 // HOOKRAIL_INGRESS_BURST, default 1000
+
 	// P2 global rate limiting (worker delivery path). Defaults to on when Redis
 	// is configured; set HOOKRAIL_GLOBAL_RATELIMIT=0 to disable.
 	GlobalRateLimit bool          // HOOKRAIL_GLOBAL_RATELIMIT (default true when RedisAddr != "")
@@ -245,6 +250,33 @@ func Load() (Config, error) {
 			errs = append(errs, fmt.Errorf("HOOKRAIL_LIMITS_REFRESH_INTERVAL must be a positive Go duration (e.g. 15s, 1s)"))
 		} else {
 			c.LimitsRefreshInterval = d
+		}
+	}
+	c.WorkerPoolSize = 8
+	if v := os.Getenv("HOOKRAIL_WORKER_POOL_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			errs = append(errs, fmt.Errorf("HOOKRAIL_WORKER_POOL_SIZE must be a positive integer"))
+		} else {
+			c.WorkerPoolSize = n
+		}
+	}
+	c.IngressRateRPS = 500
+	if v := os.Getenv("HOOKRAIL_INGRESS_RATE_RPS"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f <= 0 {
+			errs = append(errs, fmt.Errorf("HOOKRAIL_INGRESS_RATE_RPS must be a positive number"))
+		} else {
+			c.IngressRateRPS = f
+		}
+	}
+	c.IngressBurst = 1000
+	if v := os.Getenv("HOOKRAIL_INGRESS_BURST"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f <= 0 {
+			errs = append(errs, fmt.Errorf("HOOKRAIL_INGRESS_BURST must be a positive number"))
+		} else {
+			c.IngressBurst = f
 		}
 	}
 	if len(errs) > 0 {

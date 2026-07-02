@@ -154,7 +154,7 @@ func main() {
 	}()
 	tracker := worker.NewInFlight()
 
-	poolSize := envInt("HOOKRAIL_WORKER_POOL_SIZE", 8) // goroutine pool (§3.4)
+	poolSize := cfg.WorkerPoolSize // goroutine pool (§3.4), HOOKRAIL_WORKER_POOL_SIZE
 	var wg sync.WaitGroup
 	for i := 0; i < poolSize; i++ {
 		w := &worker.Worker{
@@ -194,16 +194,6 @@ func envFloat(key string, def float64) float64 {
 	if v := os.Getenv(key); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			return f
-		}
-		slog.Warn("invalid value, using default", "env", key, "value", v, "default", def)
-	}
-	return def
-}
-
-func envInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
 		}
 		slog.Warn("invalid value, using default", "env", key, "value", v, "default", def)
 	}
