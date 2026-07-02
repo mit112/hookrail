@@ -313,6 +313,13 @@ These are documented design trade-offs, not bugs.
   below it. Burst is floored at 1, so even sub-0.5 rps values eventually deliver.
   Tunables: `HOOKRAIL_RL_TIMEOUT_MS` (default 50ms), `HOOKRAIL_RL_TTL_FLOOR_S`
   (default 60s).
+- **Delivered payloads are JSON-canonicalized, not byte-preserved.** Payloads
+  are stored as Postgres `JSONB`, so the bytes delivered to a subscriber (and the
+  bytes the HMAC signature covers) are the canonical re-serialization — keys may
+  be reordered and insignificant whitespace dropped versus what the producer
+  POSTed. Signing stays self-consistent (Hookrail signs exactly the bytes it
+  sends), so signature verification always succeeds; only consumers that expect
+  byte-identical passthrough of their original JSON are affected.
 - **Secret rotation & URL cutover is eventual.** After `rotate-secret`, the old
   secret stays valid until every in-flight attempt completes or times out. The new
   secret is returned once and never stored in plaintext.

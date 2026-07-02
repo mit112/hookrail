@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -98,7 +99,7 @@ func Load() (Config, error) {
 	c.AdminToken = os.Getenv("HOOKRAIL_ADMIN_TOKEN")
 	c.AdminListen = envOr("HOOKRAIL_ADMIN_LISTEN", ":8082")
 
-	var perr error
+	var errs []error
 	posDur := func(env string, days bool, def time.Duration) time.Duration {
 		raw := os.Getenv(env)
 		if raw == "" {
@@ -106,7 +107,7 @@ func Load() (Config, error) {
 		}
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
-			perr = fmt.Errorf("%s must be a positive integer", env)
+			errs = append(errs, fmt.Errorf("%s must be a positive integer", env))
 			return def
 		}
 		if days {
@@ -122,7 +123,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("RETENTION_STREAM_MAXLEN"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n <= 0 {
-			perr = fmt.Errorf("RETENTION_STREAM_MAXLEN must be a positive integer")
+			errs = append(errs, fmt.Errorf("RETENTION_STREAM_MAXLEN must be a positive integer"))
 		} else {
 			c.StreamMaxLen = n
 		}
@@ -131,7 +132,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("RETENTION_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			perr = fmt.Errorf("RETENTION_INTERVAL must be a positive Go duration")
+			errs = append(errs, fmt.Errorf("RETENTION_INTERVAL must be a positive Go duration"))
 		} else {
 			c.RetentionInterval = d
 		}
@@ -140,7 +141,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("RETENTION_TICK_BUDGET"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			perr = fmt.Errorf("RETENTION_TICK_BUDGET must be a positive Go duration")
+			errs = append(errs, fmt.Errorf("RETENTION_TICK_BUDGET must be a positive Go duration"))
 		} else {
 			c.RetentionTickBudget = d
 		}
@@ -149,7 +150,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("RETENTION_BATCH"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
-			perr = fmt.Errorf("RETENTION_BATCH must be a positive integer")
+			errs = append(errs, fmt.Errorf("RETENTION_BATCH must be a positive integer"))
 		} else {
 			c.RetentionBatch = n
 		}
@@ -160,7 +161,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_ORDERED_KEY_BACKLOG_MAX"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
-			perr = fmt.Errorf("HOOKRAIL_ORDERED_KEY_BACKLOG_MAX must be a positive integer")
+			errs = append(errs, fmt.Errorf("HOOKRAIL_ORDERED_KEY_BACKLOG_MAX must be a positive integer"))
 		} else {
 			c.OrderedKeyBacklogMax = n
 		}
@@ -169,7 +170,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_ORDERING_KEY_MAX_LEN"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
-			perr = fmt.Errorf("HOOKRAIL_ORDERING_KEY_MAX_LEN must be a positive integer")
+			errs = append(errs, fmt.Errorf("HOOKRAIL_ORDERING_KEY_MAX_LEN must be a positive integer"))
 		} else {
 			c.OrderingKeyMaxLen = n
 		}
@@ -178,7 +179,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_DRAIN_DEADLINE"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 || d >= 30*time.Second {
-			perr = fmt.Errorf("HOOKRAIL_DRAIN_DEADLINE must be a positive duration < 30s (got %q)", v)
+			errs = append(errs, fmt.Errorf("HOOKRAIL_DRAIN_DEADLINE must be a positive duration < 30s (got %q)", v))
 		} else {
 			c.DrainDeadline = d
 		}
@@ -187,7 +188,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_DRAIN_RETRY_JITTER_MAX"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			perr = fmt.Errorf("HOOKRAIL_DRAIN_RETRY_JITTER_MAX must be a positive Go duration (got %q)", v)
+			errs = append(errs, fmt.Errorf("HOOKRAIL_DRAIN_RETRY_JITTER_MAX must be a positive Go duration (got %q)", v))
 		} else {
 			c.DrainRetryJitterMax = d
 		}
@@ -196,7 +197,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_DB_CONNECT_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			perr = fmt.Errorf("HOOKRAIL_DB_CONNECT_TIMEOUT must be a positive Go duration (got %q)", v)
+			errs = append(errs, fmt.Errorf("HOOKRAIL_DB_CONNECT_TIMEOUT must be a positive Go duration (got %q)", v))
 		} else {
 			c.DBConnectTimeout = d
 		}
@@ -210,7 +211,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_RL_TIMEOUT_MS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
-			perr = fmt.Errorf("HOOKRAIL_RL_TIMEOUT_MS must be a positive integer (milliseconds)")
+			errs = append(errs, fmt.Errorf("HOOKRAIL_RL_TIMEOUT_MS must be a positive integer (milliseconds)"))
 		} else {
 			c.RLTimeout = time.Duration(n) * time.Millisecond
 		}
@@ -219,7 +220,7 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_RL_TTL_FLOOR_S"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
-			perr = fmt.Errorf("HOOKRAIL_RL_TTL_FLOOR_S must be a positive integer (seconds)")
+			errs = append(errs, fmt.Errorf("HOOKRAIL_RL_TTL_FLOOR_S must be a positive integer (seconds)"))
 		} else {
 			c.RLTTLFloor = time.Duration(n) * time.Second
 		}
@@ -241,13 +242,13 @@ func Load() (Config, error) {
 	if v := os.Getenv("HOOKRAIL_LIMITS_REFRESH_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			perr = fmt.Errorf("HOOKRAIL_LIMITS_REFRESH_INTERVAL must be a positive Go duration (e.g. 15s, 1s)")
+			errs = append(errs, fmt.Errorf("HOOKRAIL_LIMITS_REFRESH_INTERVAL must be a positive Go duration (e.g. 15s, 1s)"))
 		} else {
 			c.LimitsRefreshInterval = d
 		}
 	}
-	if perr != nil {
-		return c, perr
+	if len(errs) > 0 {
+		return c, errors.Join(errs...)
 	}
 	return c, nil
 }
