@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -61,8 +62,10 @@ func (s *Server) replayDLQ(w http.ResponseWriter, r *http.Request) {
 			publishID = *headID
 		}
 		if perr := s.queue.Publish(r.Context(), publishID); perr != nil {
-			// non-fatal: row is pending; the sweeper will pick it up
-			_ = perr
+			// non-fatal: row is pending; the sweeper will pick it up. Log it like
+			// the other best-effort-publish sites (worker, ingest, reconcile) so
+			// a stuck replay isn't silently invisible to operators.
+			slog.Warn("dlq replay republish failed", "delivery_id", publishID, "err", perr)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"delivery_id": id, "state": "pending"})
 	case store.ReplayNotFound:

@@ -64,6 +64,19 @@ func main() {
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.Handler())
+		// /healthz is process-level here (not a loop heartbeat): the scheduler is
+		// leader-elected, so a non-leader legitimately runs no sweep loop, and a
+		// wedged leader is backstopped by the worker's own PEL recovery plus
+		// eventual advisory-lock loss. /readyz reflects the hard dependency: PG.
+		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+			if err := s.Pool.Ping(r.Context()); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("postgres unreachable\n"))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
 		_ = (&http.Server{
 			Addr:              ":8083",
 			Handler:           mux,

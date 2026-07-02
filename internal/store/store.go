@@ -9,6 +9,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -109,6 +110,19 @@ var ErrConflict = errors.New("store: conflicting state")
 
 func pgxTxRW() pgx.TxOptions { return pgx.TxOptions{} }
 
+// migrateURL rewrites the DSN scheme to golang-migrate's registered "pgx5://"
+// scheme, accepting both "postgres://" and the equally valid "postgresql://".
+// (The old len("postgres") slice produced "pgx5ql://…" for postgresql:// DSNs.)
+func migrateURL(dsn string) string {
+	if rest, ok := strings.CutPrefix(dsn, "postgresql://"); ok {
+		return "pgx5://" + rest
+	}
+	if rest, ok := strings.CutPrefix(dsn, "postgres://"); ok {
+		return "pgx5://" + rest
+	}
+	return dsn
+}
+
 // Migrate applies all embedded migrations (golang-migrate, §5).
 func (s *Store) Migrate() error {
 	src, err := iofs.New(migrationsFS, "migrations")
@@ -116,7 +130,7 @@ func (s *Store) Migrate() error {
 		return err
 	}
 	// golang-migrate's pgx/v5 driver registers the "pgx5" URL scheme.
-	m, err := migrate.NewWithSourceInstance("iofs", src, "pgx5"+s.dsn[len("postgres"):])
+	m, err := migrate.NewWithSourceInstance("iofs", src, migrateURL(s.dsn))
 	if err != nil {
 		return err
 	}
@@ -133,7 +147,7 @@ func (s *Store) MigrateDown() error {
 	if err != nil {
 		return err
 	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, "pgx5"+s.dsn[len("postgres"):])
+	m, err := migrate.NewWithSourceInstance("iofs", src, migrateURL(s.dsn))
 	if err != nil {
 		return err
 	}

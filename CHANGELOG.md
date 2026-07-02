@@ -2,7 +2,35 @@
 
 All notable changes documented here. Honest history — early entries include design corrections.
 
-## [Unreleased]
+## [0.1.0] — 2026-07-01
+
+First tagged release. Consolidates P0 core delivery, P1 (Python SDK, admin
+dashboard, k3s deploy, chaos + Grafana suite), and P2 (Postgres + Redis HA,
+3-tier RBAC, rate limiting, ordered keys), plus the public read-only demo and
+the pre-launch hardening below.
+
+### Public demo hardening & audit follow-ups
+
+- **Dashboard hardened for public read-only exposure:** the same-origin CSRF
+  check is now proxy-aware (host+port, scheme-agnostic) so it works behind a
+  TLS-terminating edge; the authenticated read surface is rate-limited
+  (per-session + global datastore backstop, applied after auth); password login
+  is disabled in demo mode; and baseline security headers (CSP, X-Frame-Options,
+  X-Content-Type-Options, Referrer-Policy, HSTS) are set on every response.
+- **Operational correctness:** the worker acks completed deliveries on a fresh
+  bounded context (no PEL leak on graceful shutdown) and logs `Autoclaim`
+  failures; workers expose a real `/healthz` loop-heartbeat + `/readyz` PG probe
+  (replacing `/metrics`-as-health, so a wedged loop is restarted); the scheduler
+  gains `/readyz`; in-process rate-limiter and login-throttle maps now evict idle
+  entries; admin write endpoints enforce a request-body size cap; privileged
+  admin mutations emit a structured audit log; and the migration URL handles the
+  `postgresql://` scheme.
+- **Tunables & docs:** worker pool size (`HOOKRAIL_WORKER_POOL_SIZE`) and ingress
+  rate limit (`HOOKRAIL_INGRESS_RATE_RPS` / `_BURST`) are now env-configurable;
+  a public `SPEC.md` design doc, `CONTRIBUTING.md`, and a `clients/web` README
+  were added; and the README documents the known scale ceilings.
+- **Dashboard UX:** paginated list views keep the current page visible while the
+  next loads, so tables and the "Load more" control no longer blank out mid-fetch.
 
 ### Redis HA — Sentinel + FailoverClient
 

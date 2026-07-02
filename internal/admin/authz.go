@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -165,6 +166,41 @@ func (s *Server) authz(min Role, next http.HandlerFunc) http.HandlerFunc {
 			httpx.Problem(w, http.StatusForbidden, "insufficient role", "requires role "+min.String())
 			return
 		}
-		next(w, r.WithContext(withPrincipal(r.Context(), p)))
+		ctx := withPrincipal(r.Context(), p)
+		// Audit trail: every privileged mutation (create/rotate/delete/replay/skip,
+		// token management) is recorded with the acting principal, target, and
+		// result — a webhook gateway that can rewrite endpoint secrets and
+		// replay/skip deliveries must attribute those actions (design §8, README
+		// "Audit trail"). Reads are not audited. The recorded status covers both
+		// successful and rejected attempts.
+		switch r.Method {
+		case http.MethodPost, http.MethodPatch, http.MethodDelete:
+			rec := &auditRecorder{ResponseWriter: w, status: http.StatusOK}
+			next(rec, r.WithContext(ctx))
+			slog.Info("admin mutation",
+				"actor_source", p.source,
+				"actor_token_id", p.tokenID,
+				"role", p.role.String(),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", rec.status,
+			)
+			return
+		}
+		next(w, r.WithContext(ctx))
 	}
+}
+
+// auditRecorder captures the response status code for the audit log. Handlers
+// on this surface only write JSON/Problem bodies (no streaming/hijack), so
+// wrapping the ResponseWriter loses no behavior. Defaults to 200 because
+// net/http treats an unwritten header as 200 OK on the first Write.
+type auditRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (a *auditRecorder) WriteHeader(code int) {
+	a.status = code
+	a.ResponseWriter.WriteHeader(code)
 }

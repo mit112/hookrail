@@ -50,7 +50,8 @@ type Worker struct {
 	Lease     time.Duration
 	Consumer  string
 
-	InFlight *InFlight // race-free in-flight tracker (reserve-before-claim); nil tolerated
+	InFlight  *InFlight // race-free in-flight tracker (reserve-before-claim); nil tolerated
+	Heartbeat func()    // pumped once per dispatch-loop iteration for liveness; nil tolerated
 }
 
 // Run is the dispatch loop: drain new messages, then steal abandoned ones.
@@ -58,6 +59,13 @@ type Worker struct {
 // workCtx drives Process (claim/HTTP/record) so in-flight deliveries survive SIGTERM.
 func (w *Worker) Run(intakeCtx, workCtx context.Context) error {
 	for intakeCtx.Err() == nil {
+		if w.Heartbeat != nil {
+			// Beat on every pass — including empty ones where Read blocks ~2s —
+			// so an idle worker still proves liveness. A per-message beat below
+			// covers long batches (a pass can process up to 16 messages serially,
+			// each up to the HTTP attempt timeout).
+			w.Heartbeat()
+		}
 		msgs, err := w.Queue.Read(intakeCtx, w.Consumer, 16, 2*time.Second)
 		if err != nil && intakeCtx.Err() == nil {
 			if queue.IsNoGroup(err) {
@@ -78,8 +86,21 @@ func (w *Worker) Run(intakeCtx, workCtx context.Context) error {
 			continue
 		}
 		if len(msgs) == 0 {
-			// PEL recovery (§6): claim messages abandoned by crashed workers
-			msgs, _ = w.Queue.Autoclaim(intakeCtx, w.Consumer, w.Lease, 16)
+			// PEL recovery (§6): claim messages abandoned by crashed workers.
+			// Observe the error like the Read path does — a silently-dropped
+			// Autoclaim failure (network blip, NOGROUP after a fast Sentinel
+			// failover) would make stalled PEL recovery invisible.
+			claimed, aerr := w.Queue.Autoclaim(intakeCtx, w.Consumer, w.Lease, 16)
+			if aerr != nil && intakeCtx.Err() == nil {
+				if queue.IsNoGroup(aerr) {
+					if gerr := w.Queue.EnsureGroup(intakeCtx); gerr != nil {
+						slog.Warn("ensure group after autoclaim NOGROUP", "err", gerr)
+					}
+				} else {
+					slog.Warn("autoclaim", "err", aerr)
+				}
+			}
+			msgs = claimed
 		}
 		for _, m := range msgs {
 			// On SIGTERM stop claiming NEW buffered work immediately: any
@@ -91,8 +112,19 @@ func (w *Worker) Run(intakeCtx, workCtx context.Context) error {
 			if intakeCtx.Err() != nil {
 				break
 			}
+			if w.Heartbeat != nil {
+				w.Heartbeat() // per-message: a long batch of slow deliveries stays live
+			}
 			w.Process(workCtx, m.DeliveryID)
-			if err := w.Queue.Ack(intakeCtx, m.ID); err != nil {
+			// Ack on a fresh bounded context, NOT intakeCtx: Process has already
+			// committed a terminal state in PG, so the XACK must still land even
+			// when SIGTERM has canceled intakeCtx. Otherwise the message lingers
+			// in the PEL until a survivor's Autoclaim recovers it — a needless
+			// duplicate-delivery window on every graceful shutdown.
+			ackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := w.Queue.Ack(ackCtx, m.ID)
+			cancel()
+			if err != nil {
 				slog.Warn("ack failed", "msg", m.ID, "err", err)
 			}
 		}

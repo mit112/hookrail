@@ -30,7 +30,10 @@ func isCheckViolation(err error) bool {
 
 func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
 	var req createSubReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TopicPattern == "" || req.EndpointID == "" {
+	if !decodeJSON(w, r, &req, maxAdminBody) {
+		return
+	}
+	if req.TopicPattern == "" || req.EndpointID == "" {
 		httpx.Problem(w, http.StatusBadRequest, "invalid body", "topic_pattern and endpoint_id are required")
 		return
 	}
@@ -105,8 +108,7 @@ type patchSubReq struct {
 
 func (s *Server) patchSubscription(w http.ResponseWriter, r *http.Request) {
 	var req patchSubReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.Problem(w, http.StatusBadRequest, "invalid body", "malformed patch")
+	if !decodeJSON(w, r, &req, maxAdminBody) {
 		return
 	}
 	id := r.PathValue("id")

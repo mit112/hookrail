@@ -157,7 +157,9 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "role": role.String(), "username": sub})
 }
 
-// throttle: fixed-window per key.
+// throttle: fixed-window per key. Expired entries are swept opportunistically
+// so the map cannot grow unbounded across distinct keys (client IPs, and — for
+// the per-session limiter — session cookie values) over the process lifetime.
 type throttle struct {
 	mu     sync.Mutex
 	limit  int
@@ -166,6 +168,7 @@ type throttle struct {
 		count int
 		start time.Time
 	}
+	lastSweep time.Time
 }
 
 func newThrottle(limit int, window time.Duration) *throttle {
@@ -182,6 +185,16 @@ func newThrottle(limit int, window time.Duration) *throttle {
 func (t *throttle) allow(key string, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// At most once per window, drop entries whose window has fully elapsed —
+	// they are indistinguishable from a fresh key, so removing them is free.
+	if now.Sub(t.lastSweep) > t.window {
+		for k, e := range t.hits {
+			if now.Sub(e.start) > t.window {
+				delete(t.hits, k)
+			}
+		}
+		t.lastSweep = now
+	}
 	e := t.hits[key]
 	if now.Sub(e.start) > t.window {
 		e.count, e.start = 0, now
