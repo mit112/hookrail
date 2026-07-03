@@ -14,8 +14,8 @@ dead-letter queues, per-endpoint rate limiting, and full observability.
 > and opt-in strict-FIFO per-key ordering (P2). The service is pre-1.0; no compatibility guarantees yet.
 
 <p align="center">
-  <img src="docs/deploy/cutover-demo/dashboard-deliveries.png" alt="Hookrail admin dashboard — live delivery state" width="800">
-  <br><sub>The admin dashboard: live delivery state, per-attempt history, and dead-letter replay.</sub>
+  <img src="docs/deploy/cutover-demo/dashboard-overview.png" alt="Hookrail admin dashboard — demo delivery overview" width="800">
+  <br><sub>The public demo dashboard: succeeded deliveries, scheduled retries, and dead letters in one read-only view.</sub>
 </p>
 
 **At a glance:** sustained **200 events/s** at **~58 ms p95** end-to-end (ingest→consumer),

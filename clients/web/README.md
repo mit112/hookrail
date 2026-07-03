@@ -3,7 +3,8 @@
 The browser admin dashboard for Hookrail: a React + TypeScript single-page app
 built with Vite, styled with the hand-authored **"Signal"** design system
 (indigo accent, monospaced ULIDs, delivery-state pills). It renders live delivery
-state, per-attempt timelines, and dead-letter replay/skip.
+state, a screenshot-focused read-only overview, per-attempt timelines, and
+dead-letter replay/skip.
 
 The SPA never talks to the admin API directly. It is served by a Go
 backends-for-frontends (BFF) that holds role-scoped admin tokens server-side,
@@ -11,6 +12,11 @@ authenticates per-user accounts, and proxies an allowlist of admin routes. UI
 role gating is cosmetic — the BFF and upstream admin API are the real boundary.
 For the auth model, session cookies, and RBAC roles, see
 [`../../docs/dashboard.md`](../../docs/dashboard.md).
+
+The default route is `/overview`. It composes the existing endpoint, delivery,
+and DLQ list APIs into three compact demo panels (`orders-service`,
+`payments-service`, `analytics-service`) plus a recent-events table; keep that
+surface quiet and screenshot-readable.
 
 ## Develop
 

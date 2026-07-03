@@ -15,7 +15,10 @@ test.describe("Dashboard e2e", () => {
     await page.fill('input[type="password"]', "dev-dashboard-pw");
     await page.click('button:has-text("Sign in")');
 
-    // 3. Wait for redirect to endpoints list
+    // 3. Wait for redirect to the public demo overview, then continue with the
+    // existing admin workflow from the endpoints list.
+    await expect(page).toHaveURL(/\/overview/, { timeout: 10_000 });
+    await page.goto("/endpoints");
     await expect(page).toHaveURL(/\/endpoints/, { timeout: 10_000 });
 
     // 4. Create an endpoint

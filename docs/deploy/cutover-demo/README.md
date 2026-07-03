@@ -55,6 +55,7 @@ status queried back through the public API. First poll already `succeeded`.
 
 | | |
 |---|---|
+| Overview — screenshot-focused public demo story in one frame | [`dashboard-overview.png`](./dashboard-overview.png) |
 | Endpoints — live endpoint, role badge, rail nav | [`dashboard-endpoints.png`](./dashboard-endpoints.png) |
 | Deliveries — the `● succeeded` state pill (signature element) | [`dashboard-deliveries.png`](./dashboard-deliveries.png) |
 
@@ -64,9 +65,9 @@ status queried back through the public API. First poll already `succeeded`.
 > emitted only Tailwind's reset layer (it was never a tunnel/asset problem). The
 > dashboard has since been given a real visual identity — the **"Signal"** design
 > system (indigo accent, monospace ULIDs/timestamps, color-coded delivery-state
-> pills). The screenshots above are from that restyled build (`clients/web`, dev
-> server against the live BFF); the new look ships in the deployed image on the
-> next CI build. All 56 web tests + lint stay green.
+> pills). The overview screenshot is now the preferred public-demo capture: it
+> shows successful deliveries, retry scheduling, and dead-letter handling without
+> requiring a video. All 56 web tests + lint stay green.
 
 ## Honest bounds (this was a demo, not production)
 

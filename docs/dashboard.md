@@ -17,6 +17,17 @@ The compose provisioner mints three role-scoped tokens and writes an `admin`
 users file automatically. The `dashboard` image is multi-stage and builds the SPA
 itself.
 
+## Public demo landing page
+
+The SPA defaults `/` to `/overview`. That read-only overview is intentionally
+small: it summarizes the live demo traffic with three panels for the success,
+retry, and dead-letter paths, then keeps a compact recent-events table below.
+It reuses the existing endpoints, deliveries, and DLQ list APIs; there is no
+separate demo-only dashboard endpoint. The demo compose overlay seeds
+human-readable receiver aliases (`orders-service`, `payments-service`,
+`analytics-service`) so the overview can lead with service names instead of raw
+endpoint IDs.
+
 ## Auth model (RBAC R2)
 
 - **Per-user accounts.** Users come from a mounted secret file

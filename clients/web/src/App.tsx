@@ -10,6 +10,7 @@ import { EndpointNew, EndpointEdit } from "./routes/EndpointForm";
 import { Subscriptions } from "./routes/Subscriptions";
 import { SubscriptionDetail } from "./routes/SubscriptionDetail";
 import { SubscriptionNew, SubscriptionEdit } from "./routes/SubscriptionForm";
+import { Overview } from "./routes/Overview";
 import { Deliveries } from "./routes/Deliveries";
 import { DeliveryTimeline } from "./routes/DeliveryTimeline";
 import { DLQ } from "./routes/DLQ";
@@ -52,6 +53,7 @@ function AppShell({ children }: { children: ReactNode }) {
       </header>
       <div className="app-body">
         <nav className="sidebar" aria-label="Primary">
+          <NavLink to="/overview" className={navClass}>Overview</NavLink>
           <NavLink to="/endpoints" className={navClass}>Endpoints</NavLink>
           <NavLink to="/subscriptions" className={navClass}>Subscriptions</NavLink>
           <NavLink to="/deliveries" className={navClass}>Deliveries</NavLink>
@@ -71,7 +73,8 @@ export function App() {
     <SessionGate>
       <AppShell>
       <Routes>
-        <Route path="/" element={<Navigate to="/endpoints" replace />} />
+        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/overview" element={<Overview />} />
         <Route path="/endpoints" element={<Endpoints />} />
         <Route path="/endpoints/new" element={<RoleRoute min="admin"><EndpointNew /></RoleRoute>} />
         <Route path="/endpoints/:id" element={<EndpointDetail />} />
