@@ -146,6 +146,12 @@ export function Overview() {
           const endpoint = endpointForLane(endpointItems, lane);
           const delivery = deliveryForLane(deliveryItems, lane, endpoint);
           const deadLetter = dlqForLane(dlqItems, delivery, endpoint);
+          const panelState = lane.key === "analytics" && deadLetter
+            ? "dead_lettered"
+            : delivery?.state ?? lane.state;
+          const latestId = lane.key === "analytics" && deadLetter
+            ? deadLetter.delivery_id
+            : delivery?.event_id;
           const finalError = lane.key === "analytics"
             ? deadLetter?.final_error ?? "http_500"
             : undefined;
@@ -154,7 +160,7 @@ export function Overview() {
             <article className={`overview-panel overview-panel--${lane.key}`} key={lane.key}>
               <div className="overview-panel__top">
                 <span className="overview-panel__title">{lane.title}</span>
-                <StatePill state={delivery?.state ?? lane.state} />
+                <StatePill state={panelState} />
               </div>
               <h2>{endpoint ? serviceForEndpoint(endpoint) : lane.service}</h2>
               <p>{lane.copy}</p>
@@ -165,7 +171,7 @@ export function Overview() {
                 </div>
                 <div>
                   <dt>Latest</dt>
-                  <dd>{delivery ? shortId(delivery.event_id) : "waiting"}</dd>
+                  <dd>{latestId ? shortId(latestId) : "waiting"}</dd>
                 </div>
                 {finalError && (
                   <div>

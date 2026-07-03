@@ -24,7 +24,7 @@ const server = setupServer(
       items: [
         { id: "del-1", event_id: "evt-orders", endpoint_id: "ep-orders", state: "succeeded" },
         { id: "del-2", event_id: "evt-payments", endpoint_id: "ep-payments", state: "retry_scheduled" },
-        { id: "del-3", event_id: "evt-analytics", endpoint_id: "ep-analytics", state: "dead_lettered" },
+        { id: "del-3", event_id: "evt-analytics", endpoint_id: "ep-analytics", state: "retry_scheduled" },
       ],
       next_cursor: "",
     }),
@@ -32,7 +32,7 @@ const server = setupServer(
   http.get("/v1/dlq", () =>
     HttpResponse.json({
       items: [
-        { delivery_id: "del-3", endpoint_id: "ep-analytics", final_error: "http_500", dead_at: "2026-01-01T00:00:10Z" },
+        { delivery_id: "del-old-analytics", endpoint_id: "ep-analytics", final_error: "http_500", dead_at: "2026-01-01T00:00:10Z" },
       ],
       next_cursor: "",
     }),
