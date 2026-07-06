@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { request } from "../api/client";
+import { LIVE_REFETCH_MS, request } from "../api/client";
 import { DeliveryListRow, DeliveryTimeline, Page } from "../api/schemas";
 
 export interface DeliveryFilters {
@@ -9,7 +9,10 @@ export interface DeliveryFilters {
   event_id?: string;
 }
 
-export function useDeliveries(filters?: DeliveryFilters, cursor?: string) {
+// `live` polls on an interval; only the Overview enables it. The paginated
+// Deliveries page leaves it off because its "Load more" accumulator does not
+// compose with background refetches.
+export function useDeliveries(filters?: DeliveryFilters, cursor?: string, live = false) {
   const params = new URLSearchParams();
   if (filters?.state) params.set("state", filters.state);
   if (filters?.endpoint_id) params.set("endpoint_id", filters.endpoint_id);
@@ -20,6 +23,7 @@ export function useDeliveries(filters?: DeliveryFilters, cursor?: string) {
   return useQuery({
     queryKey: ["deliveries", filters?.state ?? "", filters?.endpoint_id ?? "", filters?.topic ?? "", filters?.event_id ?? "", cursor ?? ""],
     placeholderData: keepPreviousData,
+    refetchInterval: live ? LIVE_REFETCH_MS : false,
     queryFn: () =>
       request("GET", `/v1/deliveries${qs ? "?" + qs : ""}`, { schema: Page(DeliveryListRow) }),
   });
