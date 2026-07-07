@@ -28,12 +28,12 @@ export function DeliveryTimeline() {
         <tbody>
           {data.attempts.map((a, i) => (
             <tr key={i}>
-              <td>{a.attempt_no}</td>
-              <td>{a.claim_version}</td>
-              <td>{a.status}</td>
-              <td>{a.http_status}</td>
-              <td>{a.error_class}</td>
-              <td>{a.latency_ms}</td>
+              <td data-label="Attempt #">{a.attempt_no}</td>
+              <td data-label="Claim Ver">{a.claim_version}</td>
+              <td data-label="Status">{a.status}</td>
+              <td data-label="HTTP Status">{a.http_status}</td>
+              <td data-label="Error Class">{a.error_class}</td>
+              <td data-label="Latency (ms)">{a.latency_ms}</td>
             </tr>
           ))}
         </tbody>

@@ -46,10 +46,10 @@ export function Endpoints() {
         <tbody>
           {allItems.map((ep) => (
             <tr key={ep.id}>
-              <td><Link to={`/endpoints/${ep.id}`}>{ep.id}</Link></td>
-              <td>{ep.url}</td>
-              <td>{ep.description}</td>
-              <td>{ep.created_at}</td>
+              <td data-label="ID"><Link to={`/endpoints/${ep.id}`}>{ep.id}</Link></td>
+              <td data-label="URL">{ep.url}</td>
+              <td data-label="Description">{ep.description}</td>
+              <td data-label="Created">{ep.created_at}</td>
             </tr>
           ))}
         </tbody>

@@ -222,7 +222,7 @@ export function Overview() {
           <h2 id="overview-recent-title">Recent events</h2>
           <Link to="/deliveries">View deliveries</Link>
         </div>
-        <table className="overview-table">
+        <table className="overview-table data-cards">
           <thead>
             <tr>
               <th>Endpoint</th>
@@ -236,14 +236,14 @@ export function Overview() {
               const endpoint = endpointsById.get(delivery.endpoint_id);
               return (
                 <tr key={delivery.id}>
-                  <td>
+                  <td data-label="Endpoint">
                     <span className="overview-service">
                       {serviceForEndpoint(endpoint, delivery.endpoint_id)}
                     </span>
                   </td>
-                  <td className="overview-id">{shortId(delivery.event_id)}</td>
-                  <td><StatePill state={delivery.state} /></td>
-                  <td>
+                  <td className="overview-id" data-label="Event">{shortId(delivery.event_id)}</td>
+                  <td data-label="State"><StatePill state={delivery.state} /></td>
+                  <td data-label="Delivery">
                     <Link className="overview-id" to={`/deliveries/${delivery.id}`}>
                       {shortId(delivery.id)}
                     </Link>

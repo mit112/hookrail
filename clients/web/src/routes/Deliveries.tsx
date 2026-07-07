@@ -101,7 +101,7 @@ export function Deliveries() {
         </label>
         <button onClick={applyFilters}>Filter</button>
       </div>
-      <table>
+      <table className="data-cards">
         <thead>
           <tr>
             <th>Delivery</th>
@@ -113,12 +113,12 @@ export function Deliveries() {
         <tbody>
           {allItems.map((d) => (
             <tr key={d.id}>
-              <td><Link to={`/deliveries/${d.id}`}>{shortId(d.id)}</Link></td>
-              <td className="cell-service" title={d.endpoint_id}>
+              <td data-label="Delivery"><Link to={`/deliveries/${d.id}`}>{shortId(d.id)}</Link></td>
+              <td className="cell-service" data-label="Endpoint" title={d.endpoint_id}>
                 {serviceForEndpoint(endpointsById.get(d.endpoint_id), shortId(d.endpoint_id))}
               </td>
-              <td className="cell-mono">{shortId(d.event_id)}</td>
-              <td><StatePill state={d.state} /></td>
+              <td className="cell-mono" data-label="Event">{shortId(d.event_id)}</td>
+              <td data-label="State"><StatePill state={d.state} /></td>
             </tr>
           ))}
         </tbody>

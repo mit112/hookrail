@@ -47,11 +47,11 @@ export function Subscriptions() {
         <tbody>
           {allItems.map((sub) => (
             <tr key={sub.id}>
-              <td><Link to={`/subscriptions/${sub.id}`}>{sub.id}</Link></td>
-              <td>{sub.topic_pattern}</td>
-              <td>{sub.endpoint_id}</td>
-              <td>{sub.max_attempts}</td>
-              <td>{String(sub.active)}</td>
+              <td data-label="ID"><Link to={`/subscriptions/${sub.id}`}>{sub.id}</Link></td>
+              <td data-label="Topic Pattern">{sub.topic_pattern}</td>
+              <td data-label="Endpoint">{sub.endpoint_id}</td>
+              <td data-label="Max Attempts">{sub.max_attempts}</td>
+              <td data-label="Active">{String(sub.active)}</td>
             </tr>
           ))}
         </tbody>
