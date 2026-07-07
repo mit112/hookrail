@@ -4,6 +4,12 @@ import { useEndpoints } from "../query/endpoints";
 import type { TEndpointRow } from "../api/schemas";
 import { RequireRole } from "../auth/role";
 
+// Compact an ISO timestamp to "YYYY-MM-DD HH:MM:SS"; leave non-ISO untouched.
+function fmtWhen(s: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(s)) return s;
+  return s.slice(0, 19).replace("T", " ");
+}
+
 export function Endpoints() {
   const [cursors, setCursors] = useState<string[]>([""]);
   const [allItems, setAllItems] = useState<TEndpointRow[]>([]);
@@ -33,6 +39,11 @@ export function Endpoints() {
   return (
     <div>
       <h1>Endpoints</h1>
+      <p className="page-lede">
+        The webhook receivers Hookrail delivers to. In this demo, three services —
+        orders, payments, and analytics — each take a different reliability path
+        (success, flaky, and hard-fail) to exercise the delivery pipeline.
+      </p>
       <RequireRole min="admin"><Link to="/endpoints/new">+ New endpoint</Link></RequireRole>
       <table>
         <thead>
@@ -49,7 +60,7 @@ export function Endpoints() {
               <td data-label="ID"><Link to={`/endpoints/${ep.id}`}>{ep.id}</Link></td>
               <td data-label="URL">{ep.url}</td>
               <td data-label="Description">{ep.description}</td>
-              <td data-label="Created">{ep.created_at}</td>
+              <td data-label="Created">{fmtWhen(ep.created_at)}</td>
             </tr>
           ))}
         </tbody>

@@ -2,8 +2,18 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useDLQ, type DLQFilters } from "../query/dlq";
 import { useReplay } from "../query/replay";
+import { useEndpoints } from "../query/endpoints";
+import { serviceForEndpoint } from "../lib/endpointName";
 import type { TDLQRow } from "../api/schemas";
 import { RequireRole } from "../auth/role";
+
+// Compact an ISO timestamp to "YYYY-MM-DD HH:MM:SS" (drop sub-seconds + Z) so
+// the table reads cleanly; leave anything non-ISO untouched.
+function fmtWhen(s?: string): string {
+  if (!s) return "—";
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(s)) return s;
+  return s.slice(0, 19).replace("T", " ");
+}
 
 export function DLQ() {
   const [cursors, setCursors] = useState<string[]>([""]);
@@ -18,6 +28,8 @@ export function DLQ() {
     currentCursor || undefined,
   );
   const replay = useReplay();
+  const endpoints = useEndpoints();
+  const endpointsById = new Map((endpoints.data?.items ?? []).map((e) => [e.id, e]));
 
   const applyFilters = () => {
     const f: DLQFilters = {};
@@ -49,17 +61,28 @@ export function DLQ() {
   return (
     <div>
       <h1>Dead Letter Queue</h1>
-      <div>
-        <input
-          placeholder="endpoint_id"
-          value={inputEndpointId}
-          onChange={(e) => setInputEndpointId(e.target.value)}
-        />
-        <input
-          placeholder="replayed"
-          value={inputReplayed}
-          onChange={(e) => setInputReplayed(e.target.value)}
-        />
+      <p className="page-lede">
+        Deliveries that exhausted their retry budget. Each one is held here with
+        its final error so an operator can inspect the failure and replay it once
+        the receiver is healthy again.
+      </p>
+      <div className="filters">
+        <label className="filter-field">
+          <span>Endpoint ID</span>
+          <input
+            placeholder="endpoint_id"
+            value={inputEndpointId}
+            onChange={(e) => setInputEndpointId(e.target.value)}
+          />
+        </label>
+        <label className="filter-field">
+          <span>Replayed</span>
+          <input
+            placeholder="replayed"
+            value={inputReplayed}
+            onChange={(e) => setInputReplayed(e.target.value)}
+          />
+        </label>
         <button onClick={applyFilters}>Filter</button>
       </div>
       <table>
@@ -77,10 +100,12 @@ export function DLQ() {
           {allItems.map((d) => (
             <tr key={d.delivery_id}>
               <td data-label="Delivery"><Link to={`/deliveries/${d.delivery_id}`}>{d.delivery_id}</Link></td>
-              <td data-label="Endpoint">{d.endpoint_id}</td>
-              <td data-label="Final Error">{d.final_error}</td>
-              <td data-label="Dead At">{d.dead_at}</td>
-              <td data-label="Replayed At">{d.replayed_at || "—"}</td>
+              <td className="cell-service" data-label="Endpoint" title={d.endpoint_id ?? ""}>
+                {serviceForEndpoint(d.endpoint_id ? endpointsById.get(d.endpoint_id) : undefined, d.endpoint_id ?? "—")}
+              </td>
+              <td data-label="Final Error"><span className="cell-error">{d.final_error}</span></td>
+              <td data-label="Dead At">{fmtWhen(d.dead_at)}</td>
+              <td data-label="Replayed At">{d.replayed_at ? fmtWhen(d.replayed_at) : "—"}</td>
               <td data-label="Action">
                 {!d.replayed_at && (
                   <RequireRole min="operator">
