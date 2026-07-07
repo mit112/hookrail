@@ -114,11 +114,13 @@ body {
   margin: 0 0 4px; overflow-wrap: anywhere;
 }
 .app-main > div > h1 + a,
-.app-main h1 + a {
+.app-main h1 + a,
+.app-main .page-lede + a {
   display: inline-block; margin: 6px 0 18px;
   color: var(--accent); font-weight: 560; text-decoration: none;
 }
-.app-main h1 + a:hover { color: var(--accent-strong); text-decoration: underline; }
+.app-main h1 + a:hover,
+.app-main .page-lede + a:hover { color: var(--accent-strong); text-decoration: underline; }
 
 .app-main > p { color: var(--muted); }
 
@@ -415,6 +417,19 @@ body {
 }
 .auth-form button:hover { background: var(--accent-strong); }
 .auth-form button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ---------- Detail header (delivery timeline) ---------- */
+.detail-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 6px;
+}
+.detail-head h1 { margin: 0; overflow-wrap: anywhere; }
+
+/* Inline error detail (DLQ final error) — mono, tinted, but not a filled pill
+   since every DLQ row is a failure and full red pills would overwhelm. */
+.cell-error {
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--bad);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- Responsive ---------- */
 /* Tablet portrait and below: stack the shell, drop the panels to one column,
