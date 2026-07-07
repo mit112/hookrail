@@ -105,12 +105,13 @@ body {
   width: 3px; border-radius: 3px; background: var(--accent);
 }
 
-.app-main { flex: 1; min-width: 0; padding: 28px 32px; max-width: 1100px; }
+.app-main { flex: 1; min-width: 0; padding: 28px 40px; max-width: 1440px; }
+.page-lede { margin: 6px 0 0; max-width: 720px; color: var(--muted); font-size: 14px; }
 
 /* ---------- Page content (element-scoped, so route files need no classes) ---------- */
 .app-main h1 {
   font-size: 21px; font-weight: 680; letter-spacing: -0.015em;
-  margin: 0 0 4px;
+  margin: 0 0 4px; overflow-wrap: anywhere;
 }
 .app-main > div > h1 + a,
 .app-main h1 + a {
@@ -137,6 +138,9 @@ body {
 .app-main tbody td {
   padding: 11px 14px; border-bottom: 1px solid var(--line);
   vertical-align: middle; color: var(--ink-soft);
+  /* Long unbroken tokens (full ULIDs, URLs) wrap instead of forcing the whole
+     table — and the page — wider than the viewport on narrower desktops. */
+  overflow-wrap: anywhere;
 }
 .app-main tbody tr:last-child td { border-bottom: 0; }
 .app-main tbody tr:hover td { background: #fafaff; }
@@ -148,6 +152,16 @@ body {
 .app-main td a { color: var(--accent); text-decoration: none; }
 .app-main td a:hover { text-decoration: underline; }
 .app-main td:not(:first-child) { font-variant-numeric: tabular-nums; }
+
+/* detail-page definition lists + code blocks: long unbroken values (URLs,
+   ULIDs, JSON policies) wrap instead of widening the page on any viewport. */
+.app-main dd { overflow-wrap: anywhere; }
+.app-main pre {
+  margin: 6px 0 0; padding: 11px 13px; max-width: 100%;
+  background: var(--neutral-bg); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 
 /* forms / filters */
 .app-main input, .app-main select {
@@ -267,6 +281,80 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- Live delivery mix ribbon ---------- */
+.pulse {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 14px 16px 13px; box-shadow: var(--shadow-card);
+}
+.pulse-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  margin-bottom: 10px;
+}
+.pulse-title {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 650;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
+}
+.pulse-window { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
+.pulse-bar {
+  display: flex; gap: 3px; height: 12px; border-radius: 999px;
+  background: var(--neutral-bg); overflow: hidden;
+}
+.pulse-seg {
+  min-width: 6px; border-radius: 999px;
+  transition: flex-grow 0.5s ease;
+}
+.pulse-seg--ok { background: var(--ok); }
+.pulse-seg--active { background: var(--active); }
+.pulse-seg--bad { background: var(--bad); }
+.pulse-seg--neutral { background: var(--faint); }
+.pulse-legend {
+  list-style: none; margin: 11px 0 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+}
+.pulse-key {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+}
+.pulse-key b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+.pulse-dot { width: 8px; height: 8px; border-radius: 2px; }
+.pulse-key--ok .pulse-dot { background: var(--ok); }
+.pulse-key--active .pulse-dot { background: var(--active); }
+.pulse-key--bad .pulse-dot { background: var(--bad); }
+.pulse-key--neutral .pulse-dot { background: var(--faint); }
+
+/* ---------- Overview panel KPI ---------- */
+.overview-panel__metric {
+  display: flex; align-items: baseline; gap: 7px; margin: 13px 0 0;
+}
+.overview-panel__count {
+  font-size: 27px; font-weight: 700; line-height: 1;
+  letter-spacing: -0.02em; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.overview-panel__unit {
+  font-family: var(--font-mono); font-size: 11px; color: var(--faint);
+}
+
+/* ---------- Filter bar + table cells ---------- */
+.filters {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px;
+  margin: 16px 0 4px;
+}
+.filter-field { display: flex; flex-direction: column; gap: 5px; }
+.filter-field > span {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--faint);
+}
+.filters .filter-field input,
+.filters .filter-field select { margin: 0; min-width: 150px; }
+.filters > button { margin-bottom: 1px; }
+.cell-service { font-weight: 600; color: var(--ink); }
+.cell-mono {
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.app-main table + .btn--ghost,
+.app-main table + button { margin-top: 14px; }
+
 /* ---------- State pill (the signature) ---------- */
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
@@ -329,20 +417,120 @@ body {
 .auth-form button:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* ---------- Responsive ---------- */
-@media (max-width: 720px) {
+/* Tablet portrait and below: stack the shell, drop the panels to one column,
+   and reflow every wide data table into cards so nothing scrolls sideways. */
+@media (max-width: 900px) {
   .app-body { flex-direction: column; }
   .sidebar {
-    flex-basis: auto; display: flex; gap: 4px; overflow-x: auto;
+    flex-basis: auto; display: flex; flex-wrap: wrap; gap: 4px 6px;
     border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px;
   }
-  .nav-item { margin-bottom: 0; white-space: nowrap; }
+  .nav-item { margin-bottom: 0; white-space: nowrap; padding: 10px 14px; }
   .nav-item.is-active::before { display: none; }
-  .app-main { padding: 20px 18px; }
+  .app-main { padding: 22px 20px; }
   .brand-sub { display: none; }
   .overview-header { flex-direction: column; gap: 10px; }
   .overview-panels { grid-template-columns: 1fr; }
   .overview-panel p { min-height: 0; }
-  .overview-panel dl { grid-template-columns: 1fr; }
+
+  /* Comfortable tap targets for the interactive chrome. */
+  .app-main button, .btn, .app-main input, .app-main select { min-height: 42px; }
+
+  /* --- Tables reflow into cards. The DOM stays a real <table> (accessibility
+     tree + existing tests unchanged); only the visual box model is remapped.
+     The header is visually hidden but kept for screen readers, each row becomes
+     a card, and each cell becomes a labelled line via data-label. --- */
+  .app-main table {
+    display: block; margin-top: 12px; background: transparent;
+    border: 0; border-radius: 0; box-shadow: none; overflow: visible;
+  }
+  .app-main thead {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); border: 0;
+  }
+  .app-main tbody { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .app-main tbody tr {
+    display: grid; gap: 5px 14px; min-width: 0;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius-sm); box-shadow: var(--shadow-card);
+    padding: 13px 15px; transition: border-color 0.12s ease;
+  }
+  .app-main tbody tr:hover { border-color: var(--line-strong); }
+  .app-main tbody tr:hover td { background: transparent; }
+  .app-main tbody td {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 14px; padding: 0; border: 0; min-width: 0; overflow-wrap: anywhere;
+  }
+  .app-main tbody td::before {
+    content: attr(data-label); flex: 0 0 auto;
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+    letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint);
+  }
+  /* An empty cell (e.g. a replayed DLQ row has no Replay action) drops out
+     entirely rather than showing an orphan label. */
+  .app-main tbody td:empty { display: none; }
+
+  /* --- Hierarchy card for the delivery feed (Deliveries + Overview "Recent
+     events"). Placement is driven by data-label, not column order, because the
+     two tables order their columns differently. Service name headlines the
+     card, the state pill floats top-right, and the ids demote to a mono line
+     with short "evt"/"dlv" prefixes and a tap-through chevron. --- */
+  .app-main .data-cards tbody tr {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "endpoint state"
+      "event    event"
+      "delivery delivery";
+    align-items: center; gap: 7px 12px;
+  }
+  .app-main .data-cards tbody td { display: block; }
+  .app-main .data-cards tbody td::before { display: none; }
+  .app-main .data-cards td[data-label="Endpoint"] {
+    grid-area: endpoint; font-family: var(--font-ui);
+    font-size: 15px; font-weight: 630; color: var(--ink);
+  }
+  .app-main .data-cards td[data-label="Endpoint"] .overview-service,
+  .app-main .data-cards td[data-label="Endpoint"] .cell-service {
+    font-family: var(--font-ui); font-size: 15px; font-weight: 630;
+  }
+  .app-main .data-cards td[data-label="State"] { grid-area: state; justify-self: end; }
+  .app-main .data-cards td[data-label="Event"] { grid-area: event; }
+  .app-main .data-cards td[data-label="Delivery"] {
+    grid-area: delivery; display: flex; align-items: baseline; gap: 6px;
+  }
+  .app-main .data-cards td[data-label="Event"],
+  .app-main .data-cards td[data-label="Event"] a,
+  .app-main .data-cards td[data-label="Delivery"],
+  .app-main .data-cards td[data-label="Delivery"] a {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 400;
+  }
+  .app-main .data-cards td[data-label="Event"]::before,
+  .app-main .data-cards td[data-label="Delivery"]::before {
+    display: inline; flex: 0 0 auto; content: "evt";
+    font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+    letter-spacing: 0; text-transform: none; color: var(--faint);
+  }
+  .app-main .data-cards td[data-label="Delivery"]::before { content: "dlv"; }
+  .app-main .data-cards td[data-label="Delivery"]::after {
+    content: "\2192"; margin-left: auto; color: var(--accent); font-size: 14px;
+  }
+}
+
+/* Tablet portrait: two cards per row so the extra width isn't wasted. */
+@media (min-width: 600px) and (max-width: 900px) {
+  .app-main tbody { grid-template-columns: 1fr 1fr; }
+}
+
+/* Phone: stack the filter/form controls full width and tighten the chrome. */
+@media (max-width: 520px) {
+  .app-main { padding: 18px 14px; }
+  .demo-banner { padding: 10px 14px; }
+  .topbar { padding: 0 14px; }
+  .filter-field { flex: 1 1 100%; }
+  .app-main input, .app-main select { width: 100%; min-width: 0; margin-right: 0; }
+  .app-main h1 { font-size: 19px; }
+  .overview-lede, .page-lede { font-size: 13.5px; }
+  .overview-panel__count { font-size: 24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

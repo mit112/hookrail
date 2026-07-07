@@ -1,8 +1,14 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useDeliveries, type DeliveryFilters } from "../query/deliveries";
-import type { TDeliveryListRow } from "../api/schemas";
+import { useEndpoints } from "../query/endpoints";
+import { DeliveryState, type TDeliveryListRow } from "../api/schemas";
+import { serviceForEndpoint } from "../lib/endpointName";
 import { StatePill } from "../components/StatePill";
+
+function shortId(id: string): string {
+  return id.length > 18 ? `${id.slice(0, 12)}...` : id;
+}
 
 export function Deliveries() {
   const [cursors, setCursors] = useState<string[]>([""]);
@@ -18,6 +24,8 @@ export function Deliveries() {
     Object.keys(filters).length > 0 ? filters : undefined,
     currentCursor || undefined,
   );
+  const endpoints = useEndpoints();
+  const endpointsById = new Map((endpoints.data?.items ?? []).map((e) => [e.id, e]));
 
   // Reset pagination when filters change
   const applyFilters = () => {
@@ -53,51 +61,70 @@ export function Deliveries() {
   return (
     <div>
       <h1>Deliveries</h1>
-      <div>
-        <input
-          placeholder="state"
-          value={inputState}
-          onChange={(e) => setInputState(e.target.value)}
-        />
-        <input
-          placeholder="endpoint_id"
-          value={inputEndpointId}
-          onChange={(e) => setInputEndpointId(e.target.value)}
-        />
-        <input
-          placeholder="topic"
-          value={inputTopic}
-          onChange={(e) => setInputTopic(e.target.value)}
-        />
-        <input
-          placeholder="event_id"
-          value={inputEventId}
-          onChange={(e) => setInputEventId(e.target.value)}
-        />
+      <p className="page-lede">
+        Every delivery attempt Hookrail has made, newest first. Filter by state
+        to isolate what succeeded, what is still retrying, or what dead-lettered.
+      </p>
+      <div className="filters">
+        <label className="filter-field">
+          <span>State</span>
+          <select value={inputState} onChange={(e) => setInputState(e.target.value)}>
+            <option value="">Any state</option>
+            {DeliveryState.options.map((s) => (
+              <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
+            ))}
+          </select>
+        </label>
+        <label className="filter-field">
+          <span>Endpoint ID</span>
+          <input
+            placeholder="01J…"
+            value={inputEndpointId}
+            onChange={(e) => setInputEndpointId(e.target.value)}
+          />
+        </label>
+        <label className="filter-field">
+          <span>Topic</span>
+          <input
+            placeholder="orders.created"
+            value={inputTopic}
+            onChange={(e) => setInputTopic(e.target.value)}
+          />
+        </label>
+        <label className="filter-field">
+          <span>Event ID</span>
+          <input
+            placeholder="01J…"
+            value={inputEventId}
+            onChange={(e) => setInputEventId(e.target.value)}
+          />
+        </label>
         <button onClick={applyFilters}>Filter</button>
       </div>
-      <table>
+      <table className="data-cards">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Event</th>
+            <th>Delivery</th>
             <th>Endpoint</th>
+            <th>Event</th>
             <th>State</th>
           </tr>
         </thead>
         <tbody>
           {allItems.map((d) => (
             <tr key={d.id}>
-              <td><Link to={`/deliveries/${d.id}`}>{d.id}</Link></td>
-              <td>{d.event_id}</td>
-              <td>{d.endpoint_id}</td>
-              <td><StatePill state={d.state} /></td>
+              <td data-label="Delivery"><Link to={`/deliveries/${d.id}`}>{shortId(d.id)}</Link></td>
+              <td className="cell-service" data-label="Endpoint" title={d.endpoint_id}>
+                {serviceForEndpoint(endpointsById.get(d.endpoint_id), shortId(d.endpoint_id))}
+              </td>
+              <td className="cell-mono" data-label="Event">{shortId(d.event_id)}</td>
+              <td data-label="State"><StatePill state={d.state} /></td>
             </tr>
           ))}
         </tbody>
       </table>
       {nextCursor && (
-        <button onClick={() => setCursors((prev) => [...prev, nextCursor])}>
+        <button className="btn--ghost" onClick={() => setCursors((prev) => [...prev, nextCursor])}>
           Load more
         </button>
       )}

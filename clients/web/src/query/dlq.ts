@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { request } from "../api/client";
+import { LIVE_REFETCH_MS, request } from "../api/client";
 import { DLQRow, Page } from "../api/schemas";
 
 export interface DLQFilters {
@@ -9,7 +9,7 @@ export interface DLQFilters {
   until?: string;
 }
 
-export function useDLQ(filters?: DLQFilters, cursor?: string) {
+export function useDLQ(filters?: DLQFilters, cursor?: string, live = false) {
   const params = new URLSearchParams();
   if (filters?.endpoint_id) params.set("endpoint_id", filters.endpoint_id);
   if (filters?.replayed) params.set("replayed", filters.replayed);
@@ -20,6 +20,7 @@ export function useDLQ(filters?: DLQFilters, cursor?: string) {
   return useQuery({
     queryKey: ["dlq", filters?.endpoint_id ?? "", filters?.replayed ?? "", filters?.since ?? "", filters?.until ?? "", cursor ?? ""],
     placeholderData: keepPreviousData,
+    refetchInterval: live ? LIVE_REFETCH_MS : false,
     queryFn: () =>
       request("GET", `/v1/dlq${qs ? "?" + qs : ""}`, { schema: Page(DLQRow) }),
   });

@@ -1,4 +1,4 @@
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -44,12 +44,15 @@ describe("Deliveries list", () => {
     const rows = screen.getAllByRole("row");
     // header + 2 data rows
     expect(rows).toHaveLength(3);
+    // Scope state assertions to the table: the filter <select> also lists these
+    // state names as options.
+    const table = within(screen.getByRole("table"));
     expect(screen.getByText("d1")).toBeInTheDocument();
     expect(screen.getByText("ev1")).toBeInTheDocument();
-    expect(screen.getByText("succeeded")).toBeInTheDocument();
+    expect(table.getByText("succeeded")).toBeInTheDocument();
     expect(screen.getByText("d2")).toBeInTheDocument();
     expect(screen.getByText("ev2")).toBeInTheDocument();
-    expect(screen.getByText("pending")).toBeInTheDocument();
+    expect(table.getByText("pending")).toBeInTheDocument();
   });
 
   it("sends state filter query parameter", async () => {
@@ -62,12 +65,9 @@ describe("Deliveries list", () => {
       }),
     );
     render(<Deliveries />, { wrapper: TestWrapper });
-    await screen.findByPlaceholderText(/state/i);
-    const stateInput = screen.getByPlaceholderText(/state/i);
-    expect(stateInput).toBeInTheDocument();
-    // Type a filter and click Filter
-    const input = screen.getByPlaceholderText(/state/i);
-    fireEvent.change(input, { target: { value: "succeeded" } });
+    // Pick a state from the select and apply the filter.
+    const stateSelect = await screen.findByLabelText(/state/i);
+    fireEvent.change(stateSelect, { target: { value: "succeeded" } });
     screen.getByRole("button", { name: /filter/i }).click();
     // After filter, the query should include ?state=succeeded
     await waitFor(() => {

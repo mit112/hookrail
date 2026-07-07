@@ -76,12 +76,12 @@ export function DLQ() {
         <tbody>
           {allItems.map((d) => (
             <tr key={d.delivery_id}>
-              <td><Link to={`/deliveries/${d.delivery_id}`}>{d.delivery_id}</Link></td>
-              <td>{d.endpoint_id}</td>
-              <td>{d.final_error}</td>
-              <td>{d.dead_at}</td>
-              <td>{d.replayed_at || "—"}</td>
-              <td>
+              <td data-label="Delivery"><Link to={`/deliveries/${d.delivery_id}`}>{d.delivery_id}</Link></td>
+              <td data-label="Endpoint">{d.endpoint_id}</td>
+              <td data-label="Final Error">{d.final_error}</td>
+              <td data-label="Dead At">{d.dead_at}</td>
+              <td data-label="Replayed At">{d.replayed_at || "—"}</td>
+              <td data-label="Action">
                 {!d.replayed_at && (
                   <RequireRole min="operator">
                     <button className="btn--ghost" onClick={() => replay.mutate(d.delivery_id)} disabled={replay.isPending}>
