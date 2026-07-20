@@ -209,7 +209,7 @@ docker pull ghcr.io/mit112/hookrail:main            # all service binaries (late
 docker pull ghcr.io/mit112/hookrail-dashboard:main  # dashboard BFF + SPA
 ```
 
-Once a release is cut, pin a version tag (e.g. `:v0.1.0`) or use `:latest`.
+Pin a version tag (e.g. `:v0.1.1`) for a stable release, or use `:latest`.
 
 **Prebuilt binaries** — grab a tarball for your OS/arch from the
 [latest release](https://github.com/mit112/hookrail/releases/latest). Covers the

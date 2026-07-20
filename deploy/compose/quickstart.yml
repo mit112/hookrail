@@ -14,9 +14,9 @@
 # observability tier and no bind-mounted config, so it needs nothing but this one
 # file. For the full stack (Grafana/Jaeger/Prometheus) use docker-compose.yml.
 #
-# Image tag defaults to `main` (the always-current CI build) so this works today,
-# before the first release. After you cut v0.1.0, pin a release instead:
-#   HOOKRAIL_IMAGE_TAG=v0.1.0 docker compose -f quickstart.yml up -d
+# Image tag defaults to `main` (the always-current CI build). To pin a stable
+# release instead:
+#   HOOKRAIL_IMAGE_TAG=v0.1.1 docker compose -f quickstart.yml up -d
 name: hookrail-quickstart
 
 x-hookrail-image: &hookrail-image ghcr.io/mit112/hookrail:${HOOKRAIL_IMAGE_TAG:-main}
