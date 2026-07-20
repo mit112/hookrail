@@ -3,6 +3,20 @@
 Thanks for your interest. Hookrail is pre-1.0 and Apache-2.0 licensed. This guide
 covers the local dev loop and the bar a change has to clear to merge.
 
+## Where to start
+
+- **New here?** Browse
+  [`good first issue`](https://github.com/mit112/hookrail/labels/good%20first%20issue)
+  and [`help wanted`](https://github.com/mit112/hookrail/labels/help%20wanted).
+  Comment on one to claim it before you start.
+- **See it run first:** `docker compose -f deploy/compose/quickstart.yml up -d`,
+  then open <http://localhost:8085>. Then read [SPEC.md](SPEC.md) for the design
+  and delivery guarantees.
+- **Found a bug or have an idea?** Open an issue with the template. For security
+  issues, use [private reporting](.github/SECURITY.md) instead.
+
+Small, focused PRs are easiest to review and merge.
+
 ## Prerequisites
 
 - Go (see `go.mod` for the toolchain version) and Docker (for integration, e2e,

@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest a capability or improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the use case, not just the feature. What are you unable to do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like Hookrail to do? Rough API/config sketches welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, or other tools that solve this.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      description: Hookrail is deliberately a small, single-purpose outbound delivery engine (see the README "Why hookrail?" section).
+      options:
+        - label: This fits an outbound HTTP webhook delivery service (not inbound ingestion, multi-destination fan-out, or a managed control plane).

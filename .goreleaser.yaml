@@ -1,0 +1,102 @@
+# GoReleaser config — builds prebuilt binaries + a GitHub Release on each `v*` tag.
+# Validate locally without releasing:  goreleaser check  &&  goreleaser release --snapshot --clean
+# The dashboard is NOT built here (it bundles a compiled SPA) — it ships as the
+# ghcr.io/mit112/hookrail-dashboard container image instead.
+version: 2
+
+project_name: hookrail
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: hookrail-api
+    main: ./cmd/hookrail-api
+    binary: hookrail-api
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+  - id: hookrail-worker
+    main: ./cmd/hookrail-worker
+    binary: hookrail-worker
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+  - id: hookrail-scheduler
+    main: ./cmd/hookrail-scheduler
+    binary: hookrail-scheduler
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+  - id: hookrail-admin
+    main: ./cmd/hookrail-admin
+    binary: hookrail-admin
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+  - id: hookrail-ctl
+    main: ./cmd/hookrail-ctl
+    binary: hookrail-ctl
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+  - id: hookrail-dash-hash
+    main: ./cmd/hookrail-dash-hash
+    binary: hookrail-dash-hash
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+
+archives:
+  - id: hookrail
+    ids:
+      - hookrail-api
+      - hookrail-worker
+      - hookrail-scheduler
+      - hookrail-admin
+      - hookrail-ctl
+      - hookrail-dash-hash
+    name_template: "hookrail_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: mit112
+    name: hookrail
+  draft: true          # Mit reviews and publishes the release manually
+  prerelease: auto     # tags like v0.1.0-rc.1 are marked pre-release
+  name_template: "hookrail {{ .Tag }}"
