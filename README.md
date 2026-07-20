@@ -21,8 +21,8 @@ It's not the biggest webhooks platform. It's the one whose durability guarantees
 are written down, chaos-tested, and honest about their limits.
 
 <p align="center">
-  <img src="docs/deploy/cutover-demo/dashboard-overview.png" alt="Hookrail admin dashboard — succeeded deliveries, scheduled retries, and dead letters" width="820">
-  <br><sub>The admin dashboard: succeeded deliveries, scheduled retries, and dead letters in one view. <a href="docs/demo/">▶ Watch a delivery, a retry, and a dead-letter happen live →</a></sub>
+  <img src="docs/demo/hookrail-demo.gif" alt="Hookrail admin dashboard delivering webhooks live — deliveries, retries, and dead letters" width="820">
+  <br><sub>The live delivery plane: events delivered, transient failures retried, and exhausted retries dead-lettered — all observable end to end. <a href="docs/demo/">▶ Full 2-minute walkthrough →</a></sub>
 </p>
 
 ## Quickstart (2 minutes, no build)
