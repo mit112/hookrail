@@ -1,0 +1,38 @@
+# Run the full stack from the published GHCR images instead of building from
+# source. Overlay it on top of the base compose file:
+#
+#   export HOOKRAIL_MASTER_KEY=$(openssl rand -hex 32)
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# Image tag defaults to `latest` (published on each tagged release); pin the
+# always-current main build with `HOOKRAIL_IMAGE_TAG=main` before the first release.
+# For a minimal, single-file, self-seeding demo instead, use quickstart.yml.
+name: hookrail
+
+x-hookrail-image: &hookrail-image ghcr.io/mit112/hookrail:${HOOKRAIL_IMAGE_TAG:-latest}
+
+services:
+  migrate:
+    build: !reset null
+    image: *hookrail-image
+  dashboard-provisioner:
+    build: !reset null
+    image: *hookrail-image
+  api:
+    build: !reset null
+    image: *hookrail-image
+  worker:
+    build: !reset null
+    image: *hookrail-image
+  scheduler:
+    build: !reset null
+    image: *hookrail-image
+  admin:
+    build: !reset null
+    image: *hookrail-image
+  test-receiver:
+    build: !reset null
+    image: *hookrail-image
+  dashboard:
+    build: !reset null
+    image: ghcr.io/mit112/hookrail-dashboard:${HOOKRAIL_IMAGE_TAG:-latest}
