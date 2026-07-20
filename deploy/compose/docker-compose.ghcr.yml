@@ -4,12 +4,12 @@
 #   export HOOKRAIL_MASTER_KEY=$(openssl rand -hex 32)
 #   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 #
-# Image tag defaults to `latest` (published on each tagged release); pin the
-# always-current main build with `HOOKRAIL_IMAGE_TAG=main` before the first release.
+# Image tag defaults to `main` (the always-current CI build) so this works today,
+# before the first release; after v0.1.0, pin `HOOKRAIL_IMAGE_TAG=v0.1.0`.
 # For a minimal, single-file, self-seeding demo instead, use quickstart.yml.
 name: hookrail
 
-x-hookrail-image: &hookrail-image ghcr.io/mit112/hookrail:${HOOKRAIL_IMAGE_TAG:-latest}
+x-hookrail-image: &hookrail-image ghcr.io/mit112/hookrail:${HOOKRAIL_IMAGE_TAG:-main}
 
 services:
   migrate:
@@ -35,4 +35,4 @@ services:
     image: *hookrail-image
   dashboard:
     build: !reset null
-    image: ghcr.io/mit112/hookrail-dashboard:${HOOKRAIL_IMAGE_TAG:-latest}
+    image: ghcr.io/mit112/hookrail-dashboard:${HOOKRAIL_IMAGE_TAG:-main}

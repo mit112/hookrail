@@ -14,12 +14,12 @@
 # observability tier and no bind-mounted config, so it needs nothing but this one
 # file. For the full stack (Grafana/Jaeger/Prometheus) use docker-compose.yml.
 #
-# Image tag defaults to `latest` (published on each tagged release). Before the
-# first release you can pin the always-current main build:
-#   HOOKRAIL_IMAGE_TAG=main docker compose -f quickstart.yml up -d
+# Image tag defaults to `main` (the always-current CI build) so this works today,
+# before the first release. After you cut v0.1.0, pin a release instead:
+#   HOOKRAIL_IMAGE_TAG=v0.1.0 docker compose -f quickstart.yml up -d
 name: hookrail-quickstart
 
-x-hookrail-image: &hookrail-image ghcr.io/mit112/hookrail:${HOOKRAIL_IMAGE_TAG:-latest}
+x-hookrail-image: &hookrail-image ghcr.io/mit112/hookrail:${HOOKRAIL_IMAGE_TAG:-main}
 
 # Fixed subnet so HOOKRAIL_ALLOW_CIDRS can name it: in-network delivery to the
 # bundled receiver resolves to this range, which the default SSRF policy would
@@ -147,7 +147,7 @@ services:
       migrate: { condition: service_completed_successfully }
 
   dashboard:
-    image: ghcr.io/mit112/hookrail-dashboard:${HOOKRAIL_IMAGE_TAG:-latest}
+    image: ghcr.io/mit112/hookrail-dashboard:${HOOKRAIL_IMAGE_TAG:-main}
     command: ["hookrail-dashboard"]
     environment:
       HOOKRAIL_ADMIN_URL: http://admin:8082
